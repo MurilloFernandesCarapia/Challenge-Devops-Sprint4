@@ -9,7 +9,7 @@ az cosmosdb create \
   --name "$COSMOS_NAME" \
   --resource-group "$RG_NAME" \
   --kind MongoDB \
-  --server-version 4.2 \
+  --server-version 6.0 \
   --enable-free-tier true \
   --default-consistency-level Session \
   --locations regionName="$LOCATION" failoverPriority=0 isZoneRedundant=false \
