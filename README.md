@@ -1,1122 +1,570 @@
-# PetCare 360 — API .NET
+# PetCare 360 — CI/CD com Azure DevOps
 
-API .NET do projeto **PetCare 360**, que estou desenvolvendo no Challenge 2026 da FIAP em parceria com a CLYVO VET.
+Entrega da **4ª Sprint** da disciplina **DevOps Tools & Cloud Computing** — Challenge FIAP 2026, em parceria com a **CLYVO VET**.
 
-A ideia é resolver um problema que qualquer dono de pet conhece: hoje a saúde do bicho vive aos pedaços. Tutor vai na clínica só quando o pet adoece, esquece vacina, perde a carteirinha, troca de clínica e o histórico fica perdido. O PetCare 360 tenta juntar tutor, pet, clínica e atendimentos num lugar só — cadastros, consultas, vacinas, medicamentos e o histórico completo de cada animal.
+Nesta sprint a API .NET do PetCare 360 ganhou uma **esteira completa de CI/CD no Azure DevOps**. Todo commit na branch `master` compila a solução, roda os 122 testes automatizados, gera um artefato versionado e, sem ninguém clicar em nada, publica a nova versão no **Azure Web App**. A API conversa com dois bancos em nuvem: o **Oracle da FIAP**, que guarda o domínio veterinário, e o **Azure Cosmos DB for MongoDB**, que guarda a auditoria.
 
-Esta API é o núcleo de cadastro: toda informação principal passa por aqui antes de ir pro app mobile.
-
-## Quem fez
-
-Sou o Murillo, da turma **2TDSPW** (2º ano de ADS na FIAP). Nesse grupo eu fiquei responsável pelas APIs do projeto. Os integrantes:
-
-- Murillo Fernandes Carapia, RM: 564969
-- João Vitor Lacerda, RM: 565565
-- Kauan Vieira de Lima, RM: 565403
-- Pedro de Matos Previtali, RM: 564184
-
-## O que essa API faz
-
-CRUD completo de 6 entidades:
-
-- `Tutor` — quem é responsável pelo pet
-- `Pet` — o animal em si
-- `Clinica` — onde os atendimentos acontecem
-- `Consulta` — visita veterinária
-- `Vacina` — registro de vacinação
-- `Medicamento` — prescrição/tratamento
-
-Cada uma tem GET, POST, PUT e DELETE, mais umas rotas extras (tipo "lista todas as vacinas desse pet" ou "me dá o histórico completo desse animal").
-
-Além disso, a API tem **login com JWT** (perfis Admin e Usuario) e uma **auditoria** gravada no MongoDB, que registra toda criação, atualização e exclusão feita no sistema.
-
-## O que mudou nesta sprint (Sprint 4)
-
-Na Sprint 3 a API ficou observável e testável: arquitetura em camadas, health checks, logs com Serilog, tracing com OpenTelemetry e os primeiros testes. Nesta sprint ela virou uma **API REST completa e segura**:
-
-- **Tratamento global de exceções** — nenhum controller tem `try/catch`. Um `GlobalExceptionHandler` traduz cada erro pro status HTTP certo e responde sempre no padrão **ProblemDetails**, com `traceId` e `correlationId`.
-- **Paginação, ordenação e filtros** — todas as listagens aceitam `pagina`, `tamanhoPagina`, `ordenarPor` e filtros próprios de cada entidade, tudo executado direto no banco.
-- **HATEOAS** — cada recurso volta com links pras ações possíveis (atualizar, excluir, ver histórico, ver tutor...) e as listas trazem links de navegação entre páginas.
-- **MongoDB** — segundo banco do projeto, usado pra **auditoria**. Cada operação gera um documento com entidade, ação, descrição e data.
-- **Autenticação e autorização com JWT** — endpoints protegidos, perfis **Admin** e **Usuario**, senhas guardadas com hash PBKDF2.
-- **Health check do MongoDB** — o readiness agora confere o Oracle e o MongoDB.
-- **Testes** — de 35 pra **122 testes**, com **92,1% de cobertura** nas camadas de Domínio e Aplicação.
-
-## Tecnologias
-
-.NET 10 com ASP.NET Core, Entity Framework Core 10, Oracle 19c (banco da FIAP) e Swagger pra documentação. Tudo Code-First — a estrutura das tabelas é definida pelas classes do C# e o EF Core gera o SQL.
-
-No NoSQL: MongoDB 7 com o MongoDB.Driver, rodando em Docker junto com o Mongo Express (interface web pra ver os dados).
-
-Na segurança: JWT Bearer pra autenticação e PBKDF2 (SHA-256, 100.000 iterações) pro hash das senhas.
-
-Na observabilidade: Serilog pros logs, OpenTelemetry pros traces e métricas, e Microsoft.Extensions.Diagnostics.HealthChecks pros health checks.
-
-Nos testes: xUnit como framework, Moq pros mocks, WebApplicationFactory pra subir a API em memória, e Coverlet + ReportGenerator pro relatório de cobertura.
-
----
-
-# Arquitetura
-
-O projeto segue a **Clean Architecture**. O sentido das dependências é sempre de fora pra dentro: o Domain não conhece o banco nem a API — quem conhece o Domain são as camadas de fora. Isso é o princípio da Inversão de Dependência (o **D** do SOLID) e é o que permite testar as regras de negócio sem banco nenhum.
-
-## Diagrama da solução
-
-```mermaid
-flowchart TB
-    Cliente["📱 App Mobile / Swagger"]
-
-    subgraph API["PetCare360.API — Apresentação"]
-        MW["Middlewares<br/>CorrelationId · Serilog · ExceptionHandler<br/>Authentication · Authorization"]
-        CTRL["Controllers<br/>Tutores · Pets · Clinicas · Consultas<br/>Vacinas · Medicamentos · Auth · Auditoria"]
-        HATE["HATEOAS<br/>Recurso · RecursoPaginado · Link"]
-    end
-
-    subgraph APP["PetCare360.Application — Regras de negócio"]
-        SRV["Services<br/>validações · auditoria<br/>spans e métricas OpenTelemetry"]
-    end
-
-    subgraph DOM["PetCare360.Domain — Núcleo"]
-        ENT["Entities · Dtos · Exceptions"]
-        INT["Interfaces<br/>I*Repository · I*Service"]
-        PAG["Pagination<br/>QueryParameters · PagedResult"]
-    end
-
-    subgraph INF["PetCare360.Infrastructure — Detalhes técnicos"]
-        REPO["Repositories<br/>EF Core e MongoDB"]
-        SEC["Security<br/>JwtTokenService · Pbkdf2SenhaHasher"]
-        HC["HealthChecks<br/>Oracle · MongoDB · Migrations"]
-        DI["DependencyInjection"]
-    end
-
-    ORA[("Oracle 19c<br/>TB_TUTOR · TB_PET · TB_CLINICA<br/>TB_CONSULTA · TB_VACINA<br/>TB_MEDICAMENTO · TB_USUARIO_PETCARE")]
-    MONGO[("MongoDB<br/>coleção auditoria")]
-
-    Cliente -->|"HTTP + JWT"| MW --> CTRL
-    CTRL --> HATE
-    CTRL --> SRV
-    SRV --> INT
-    REPO -.->|implementa| INT
-    SEC -.->|implementa| INT
-    REPO --> ORA
-    REPO --> MONGO
-    HC --> ORA
-    HC --> MONGO
-```
-
-O fluxo de uma requisição:
-
-```
-HTTP → CorrelationId → Serilog → ExceptionHandler → Authentication → Authorization
-     → Controller → Service (regra de negócio + auditoria) → Repository → EF Core → Oracle
-                                                                       └→ MongoDB (auditoria)
-```
-
-## Cada camada
-
-| Projeto | O que tem | Depende de |
-|---|---|---|
-| `PetCare360.Domain` | Entidades, DTOs, exceções de negócio, interfaces e objetos de paginação | ninguém |
-| `PetCare360.Application` | Services com as regras de negócio, auditoria e telemetria | Domain |
-| `PetCare360.Infrastructure` | EF Core, Oracle, MongoDB, repositórios, JWT, hash de senha, health checks e injeção de dependência | Domain e Application |
-| `PetCare360.API` | Controllers, HATEOAS, middlewares, tratamento de erros, Swagger e autenticação | Application e Infrastructure |
-
-## SOLID na prática
-
-- **S — Responsabilidade única:** controller só cuida de HTTP, service só da regra de negócio, repository só do acesso a dados. O `HateoasBuilder` só monta links e o `GlobalExceptionHandler` só traduz exceções.
-- **O — Aberto/fechado:** um tipo novo de erro entra como mais um caso no handler global, sem mexer em controller nenhum. Um health check novo é só mais uma classe que implementa `IHealthCheck`.
-- **L — Substituição de Liskov:** o `AuditoriaRepository` (MongoDB de verdade) e o `FakeAuditoriaRepository` (dos testes) são trocados livremente porque cumprem o mesmo contrato.
-- **I — Segregação de interfaces:** cada entidade tem sua própria interface de repositório e de service. `ISenhaHasher` e `ITokenService` são contratos pequenos e separados.
-- **D — Inversão de dependência:** os services dependem só de interfaces do Domain, nunca de EF Core ou MongoDB.
-
-## Injeção de dependência
-
-Tudo é registrado no `PetCare360.Infrastructure/DependencyInjection.cs`, e o `Program.cs` chama só um `builder.Services.AddInfrastructure(builder.Configuration)`:
-
-- repositórios e services como **Scoped** (um por requisição)
-- `MongoClient` e o hasher de senha como **Singleton** (são thread-safe e caros de criar)
-- configurações (`MongoDbSettings`, `JwtSettings`) pelo Options Pattern
-
----
-
-# Como instalar e executar
-
-> ⚠️ **Importante:** Esta API usa **Code-First com EF Core Migrations**. Isso significa que **você não precisa criar tabela nenhuma manualmente** — o próprio EF cria toda a estrutura do banco pra você no Passo 5.
-
-## Pré-requisitos
-
-Você precisa ter instalado:
-
-1. **.NET 10 SDK** — baixe em https://dotnet.microsoft.com/download
-2. **Docker Desktop** — pra rodar o MongoDB. Baixe em https://www.docker.com/products/docker-desktop
-3. **Acesso a um banco Oracle** — pode ser:
-   - Oracle da FIAP (`oracle.fiap.com.br:1521/ORCL`) com seu usuário/senha de aluno
-   - Oracle XE local (`localhost:1521/XEPDB1`)
-   - Qualquer outra instância Oracle 19c+ que você tenha acesso
-
-Pra conferir se tá tudo instalado, abre o PowerShell e roda:
-
-```powershell
-dotnet --version
-docker --version
-```
-
-O primeiro tem que mostrar algo tipo `10.0.x`.
-
----
-
-## Passo 1 — Clonar o repositório
-
-```powershell
-git clone https://github.com/MurilloFernandesCarapia/Challenge.NET.git
-cd Challenge.NET
-```
-
-## Passo 2 — Subir o MongoDB com Docker
-
-Com o Docker Desktop aberto, roda na raiz do projeto (onde está o `docker-compose.yml`):
-
-```powershell
-docker compose up -d
-```
-
-Isso sobe dois containers:
-
-| Container | Porta | Pra que serve |
-|---|---|---|
-| `petcare360-mongodb` | 27017 | O banco MongoDB, onde fica a auditoria |
-| `petcare360-mongo-express` | 8081 | Interface web pra ver os dados: http://localhost:8081 |
-
-Pra conferir se subiu, roda `docker ps` — os dois têm que aparecer como `Up`.
-
-## Passo 3 — Instalar a ferramenta do EF Core (uma vez só na sua máquina)
-
-Essa ferramenta é o que aplica as migrations no banco. Se você nunca usou EF antes, roda isso:
-
-```powershell
-dotnet tool install --global dotnet-ef
-```
-
-Se já tem instalado, ele vai dizer "tool already installed", o que é normal. **Feche e reabra o PowerShell** depois desse comando pra atualizar o PATH.
-
-Pra confirmar que funcionou:
-
-```powershell
-dotnet ef --version
-```
-
-## Passo 4 — Configurar suas credenciais do Oracle
-
-A connection string **não fica no `appsettings.json`**. O arquivo versionado tem só um placeholder, de propósito: senha em repositório público é problema de segurança.
-
-As credenciais vão no **User Secrets**, que guarda os dados fora da pasta do projeto:
-
-```powershell
-cd PetCare360.API
-dotnet user-secrets set "ConnectionStrings:OracleConnection" "User Id=SEU_USUARIO;Password=SUA_SENHA;Data Source=oracle.fiap.com.br:1521/ORCL;"
-cd ..
-```
-
-Substitua:
-- `SEU_USUARIO` pelo seu usuário Oracle (ex: o seu RM da FIAP)
-- `SUA_SENHA` pela sua senha
-- `Data Source` se você usa outro servidor (ex: `localhost:1521/XEPDB1` pro Oracle XE local)
-
-No Visual Studio também dá pra fazer pela interface: botão direito no projeto `PetCare360.API` → **Gerenciar Segredos do Usuário** → cola o JSON:
-
-```json
-{
-  "ConnectionStrings": {
-    "OracleConnection": "User Id=SEU_USUARIO;Password=SUA_SENHA;Data Source=oracle.fiap.com.br:1521/ORCL;"
-  }
-}
-```
-
-> 💡 A conexão do MongoDB já vem pronta no `appsettings.json` (`mongodb://localhost:27017`), apontando pro container do Passo 2. Não precisa configurar nada.
-
-## Passo 5 — Criar as tabelas no banco (aplicar as migrations)
-
-Esse é o passo mágico. Roda na raiz do projeto:
-
-```powershell
-dotnet ef database update --project PetCare360.Infrastructure --startup-project PetCare360.API
-```
-
-> O comando aponta pros dois projetos porque o `AppDbContext` mora no `PetCare360.Infrastructure`, mas quem tem a connection string é o `PetCare360.API`.
-
-O que esse comando faz:
-
-1. Conecta no Oracle usando as credenciais do User Secrets
-2. Cria a tabela de controle `__EFMigrationsHistory`
-3. Executa as 3 migrations existentes (`InitialCreate`, `AjusteModelo` e `AdicionaUsuarios`)
-4. Resultado: **7 tabelas criadas** com chaves estrangeiras, índices e constraints prontos:
-   - `TB_TUTOR`, `TB_PET`, `TB_CLINICA`, `TB_CONSULTA`, `TB_VACINA`, `TB_MEDICAMENTO` e `TB_USUARIO_PETCARE`
-
-Se rodar sem erros, tá tudo pronto. Se der erro de conexão, confere as credenciais do Passo 4.
-
-## Passo 6 — Restaurar pacotes e rodar a API
-
-```powershell
-dotnet restore
-dotnet run --project PetCare360.API
-```
-
-O console vai mostrar algo tipo:
-
-```
-Now listening on: http://localhost:5260
-Now listening on: https://localhost:7031
-```
-
-Abre o navegador em uma dessas URLs adicionando `/swagger`:
-
-- **HTTP:** http://localhost:5260/swagger
-- **HTTPS:** https://localhost:7031/swagger
-
-Na primeira vez que a API sobe, ela cria sozinha um **usuário administrador** pra você conseguir testar tudo:
-
-| E-mail | Senha | Perfil |
-|---|---|---|
-| `admin@petcare360.com` | `Admin@123` | Admin |
-
-Pronto, é só fazer o login (explicado logo abaixo) e testar os endpoints.
-
-> 🔐 A chave do JWT e a senha do admin que estão no `appsettings.json` são **só pra desenvolvimento**. Em produção elas são trocadas por variável de ambiente, sem mexer no código:
+> **Aplicação no ar:**
+> - Swagger: `https://petcare360-rm564969.azurewebsites.net/swagger`
+> - Health check: `https://petcare360-rm564969.azurewebsites.net/health`
 >
-> ```powershell
-> $env:Jwt__Key = "uma-chave-longa-e-secreta-com-pelo-menos-32-caracteres"
-> $env:AdminPadrao__Senha = "SenhaForteDeProducao"
-> ```
+> **Projeto no Azure DevOps:** `https://dev.azure.com/RM564969/Sprint%204%20-%20Azure%20DevOps`
 
 ---
 
-# Autenticação e autorização (JWT)
+## Sumário
 
-Todos os endpoints de negócio exigem um **token JWT**. Só o login, o cadastro de usuário e os health checks são públicos.
-
-## Quem pode o quê
-
-| Ação | Sem token | Perfil **Usuario** | Perfil **Admin** |
-|---|---|---|---|
-| Login e cadastro (`/api/Auth/login` e `/api/Auth/registrar`) | ✅ | ✅ | ✅ |
-| GET, POST e PUT das 6 entidades | ❌ 401 | ✅ | ✅ |
-| DELETE de qualquer entidade | ❌ 401 | ❌ 403 | ✅ |
-| Consultar a auditoria (`/api/Auditoria`) | ❌ 401 | ❌ 403 | ✅ |
-| Health checks (`/health/*`) | ✅ | ✅ | ✅ |
-
-Quem se cadastra pelo `/api/Auth/registrar` sempre entra como **Usuario**. O **Admin** é o que a API cria sozinha na primeira execução.
-
-## Como fazer login no Swagger
-
-1. Executa o `POST /api/Auth/login` com:
-   ```json
-   {
-     "email": "admin@petcare360.com",
-     "senha": "Admin@123"
-   }
-   ```
-2. Copia o valor de `token` que vem na resposta:
-   ```json
-   {
-     "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-     "expiraEm": "2026-09-30T14:30:00Z",
-     "nome": "Administrador",
-     "email": "admin@petcare360.com",
-     "perfil": "Admin"
-   }
-   ```
-3. Clica no botão **Authorize** 🔓 no topo do Swagger, cola o token e confirma.
-4. Pronto: todas as chamadas passam a mandar `Authorization: Bearer <token>`. O Swagger lembra do token mesmo se você recarregar a página.
-
-## Detalhes de segurança
-
-- O token é assinado com **HMAC-SHA256**, vale **120 minutos** e carrega id, nome, e-mail e perfil do usuário.
-- Senha nunca é salva em texto puro: vai com **PBKDF2 + SHA-256**, 100.000 iterações e um salt aleatório por usuário. A comparação usa `FixedTimeEquals` pra não dar brecha pra ataque de tempo.
-- O 401 e o 403 também voltam no formato **ProblemDetails**, igual aos outros erros.
-
-Sem token (401):
-
-![Erro 401 sem token](docs/screenshots/erro-401.png)
-
-Logado como Usuario tentando excluir (403):
-
-![Erro 403 sem permissão](docs/screenshots/erro-403.png)
+- [Integrantes](#integrantes)
+- [Descrição da solução](#descrição-da-solução)
+- [Stack de tecnologias](#stack-de-tecnologias)
+- [Arquitetura e fluxo CI/CD](#arquitetura-e-fluxo-cicd)
+- [Banco de dados em nuvem](#banco-de-dados-em-nuvem)
+- [Projeto no Azure DevOps](#projeto-no-azure-devops)
+- [Pipeline de CI](#pipeline-de-ci)
+- [Pipeline de CD](#pipeline-de-cd)
+- [Regras da pipeline atendidas](#regras-da-pipeline-atendidas)
+- [Variáveis de ambiente protegidas](#variáveis-de-ambiente-protegidas)
+- [Infraestrutura via Azure CLI](#infraestrutura-via-azure-cli)
+- [Como reproduzir do zero (How To)](#como-reproduzir-do-zero-how-to)
+- [Testando a aplicação na nuvem (CRUD + SELECT)](#testando-a-aplicação-na-nuvem-crud--select)
+- [Testes automatizados](#testes-automatizados)
+- [Estrutura do repositório](#estrutura-do-repositório)
+- [Rodando localmente (opcional)](#rodando-localmente-opcional)
+- [Problemas que enfrentamos e como resolvemos](#problemas-que-enfrentamos-e-como-resolvemos)
+- [Removendo os recursos](#removendo-os-recursos)
 
 ---
 
-# Paginação, ordenação e filtros
+## Integrantes
 
-Todas as listagens (`GET /api/Tutores`, `GET /api/Pets` etc.) aceitam os mesmos parâmetros. O `Skip` e o `Take` rodam **no banco**, então só a página pedida trafega pela rede.
+**Turma 2TDSPW** — Análise e Desenvolvimento de Sistemas
 
-| Parâmetro | Padrão | Regra |
+| Nome completo | RM | Turma |
 |---|---|---|
-| `pagina` | 1 | Valor menor que 1 vira 1 |
-| `tamanhoPagina` | 10 | Máximo 50. Acima disso é limitado, e 0 ou negativo volta pro padrão |
-| `ordenarPor` | id | Campo da ordenação (tabela abaixo) |
-| `ascendente` | true | `false` inverte a ordem |
-
-Filtros e campos de ordenação de cada entidade:
-
-| Entidade | Filtros | `ordenarPor` aceita |
-|---|---|---|
-| Tutores | `nome`, `email`, `cpf` | `nome`, `email` |
-| Pets | `nome`, `especie`, `raca`, `idTutor` | `nome`, `especie`, `peso`, `dataNascimento` |
-| Clínicas | `nome`, `cnpj` | `nome` |
-| Consultas | `idPet`, `idClinica`, `dataInicio`, `dataFim` | `data` |
-| Vacinas | `nome`, `fabricante`, `idPet`, `proximaDoseAte` | `nome`, `dataAplicacao`, `proximaDose` |
-| Medicamentos | `nome`, `idPet`, `emUso` | `nome`, `dataInicio` |
-| Auditoria | `entidade`, `entidadeId`, `acao`, `dataInicio`, `dataFim` | sempre do mais recente pro mais antigo |
-
-Os filtros de texto (nome, e-mail, espécie, raça, fabricante) buscam por pedaço da palavra, sem diferenciar maiúscula de minúscula. Os de id, CPF e CNPJ são exatos. O `emUso=true` traz os medicamentos sem data de fim ou com fim a partir de hoje. Dá pra combinar todos.
-
-Exemplos:
-
-```
-GET /api/Pets?especie=Cachorro&ordenarPor=nome&pagina=1&tamanhoPagina=5
-GET /api/Vacinas?proximaDoseAte=2026-12-31&ordenarPor=proximaDose
-GET /api/Medicamentos?idPet=1&emUso=true
-GET /api/Consultas?dataInicio=2026-01-01&dataFim=2026-06-30&ascendente=false
-```
-
-No Swagger os filtros aparecem como campos de preenchimento:
-
-![Filtros no Swagger](docs/screenshots/swagger-filtros.png)
+| Murillo Fernandes Carapia | RM564969 | 2TDSPW |
+| Kauan Vieira de Lima | RM565403 | 2TDSPW |
+| João Vitor Lacerda | RM565565 | 2TDSPW |
+| Pedro de Matos Previtali | RM564184 | 2TDSPW |
 
 ---
 
-# HATEOAS
+## Descrição da solução
 
-Toda resposta traz, junto com os dados, os **links pras próximas ações possíveis**. O app não precisa montar URL na mão — é só seguir os links.
+O **PetCare 360** nasceu de um problema que todo dono de pet conhece: a saúde do animal vive aos pedaços. O tutor perde a carteirinha de vacinação, esquece quando foi a última dose, troca de clínica e o histórico fica pra trás. Cada clínica tem seu sistema, cada veterinário anota do seu jeito, e quem paga o preço é o animal.
 
-Um recurso (`GET /api/Pets/1`):
+A nossa API centraliza **tutor, pet, clínica, consultas, vacinas e medicamentos** num lugar só. Ela é o núcleo de cadastro do projeto: antes de qualquer informação chegar ao app do tutor ou ao painel da clínica, ela passa por aqui.
 
-```json
-{
-  "dados": {
-    "idPet": 1,
-    "nmPet": "Rex",
-    "especie": "Cachorro",
-    "raca": "Labrador",
-    "peso": 28.5,
-    "idTutor": 1
-  },
-  "links": [
-    { "href": "/api/Pets/1", "rel": "self", "method": "GET" },
-    { "href": "/api/Pets/1", "rel": "update", "method": "PUT" },
-    { "href": "/api/Pets/1", "rel": "delete", "method": "DELETE" },
-    { "href": "/api/Pets/1/historico", "rel": "historico", "method": "GET" },
-    { "href": "/api/Tutores/1", "rel": "tutor", "method": "GET" },
-    { "href": "/api/Consultas/pet/1", "rel": "consultas", "method": "GET" },
-    { "href": "/api/Vacinas/pet/1", "rel": "vacinas", "method": "GET" },
-    { "href": "/api/Medicamentos/pet/1", "rel": "medicamentos", "method": "GET" }
-  ]
-}
-```
+O que a aplicação entrega:
 
-Uma lista paginada (`GET /api/Pets?pagina=2&tamanhoPagina=5`):
+- **CRUD completo de 6 entidades** relacionadas, com rotas extras como o histórico clínico completo de um pet
+- **Login com JWT** e perfis de acesso (**Admin** e **Usuario**), com senhas guardadas em hash PBKDF2
+- **Auditoria** de toda criação, alteração e exclusão, gravada no Cosmos DB (API do MongoDB)
+- **Paginação, filtros e HATEOAS** nas listagens
+- **Health checks** que conferem o Oracle, o MongoDB e as migrations
+- **Logs estruturados** com Serilog e **tracing/métricas** com OpenTelemetry
 
-```json
-{
-  "itens": [ { "dados": { "...": "..." }, "links": [ "..." ] } ],
-  "pagina": 2,
-  "tamanhoPagina": 5,
-  "totalItens": 23,
-  "totalPaginas": 5,
-  "temPaginaAnterior": true,
-  "temProximaPagina": true,
-  "links": [
-    { "href": "/api/Pets?pagina=2&tamanhoPagina=5&ascendente=true", "rel": "self", "method": "GET" },
-    { "href": "/api/Pets?pagina=1&tamanhoPagina=5&ascendente=true", "rel": "first", "method": "GET" },
-    { "href": "/api/Pets?pagina=1&tamanhoPagina=5&ascendente=true", "rel": "previous", "method": "GET" },
-    { "href": "/api/Pets?pagina=3&tamanhoPagina=5&ascendente=true", "rel": "next", "method": "GET" },
-    { "href": "/api/Pets?pagina=5&tamanhoPagina=5&ascendente=true", "rel": "last", "method": "GET" },
-    { "href": "/api/Pets", "rel": "create", "method": "POST" }
-  ]
-}
-```
+**O foco desta entrega** não é a regra de negócio (essa foi construída em Advanced Business Development with .NET), e sim o **ciclo de entrega contínua**:
 
-Os links de navegação **mantêm os filtros** que você usou: se filtrou por `especie=Cachorro`, o `next` continua filtrando. O `previous` só aparece se existe página anterior, e o `next` só se existe próxima.
+- Repositório Git no GitHub conectado ao **Azure Pipelines**
+- **CI** disparada a cada push na `master`: build, **122 testes automatizados**, cobertura de código e **publicação do artefato**
+- **CD** disparada automaticamente quando um **novo artefato** é gerado: configura os segredos e faz o **deploy no Azure Web App**
+- **Credenciais protegidas** num Variable Group com valores secretos, sem nenhuma senha no código ou no YAML
+- Infraestrutura criada por **Azure CLI**, versionada em `scripts/`
 
-O formato também aparece documentado no Swagger:
+### Benefícios para o negócio
 
-![Estrutura HATEOAS no Swagger](docs/screenshots/swagger-hateoas.png)
+**Para o tutor e para a clínica.** O histórico do pet fica disponível na nuvem, de qualquer lugar, mesmo se o tutor trocar de clínica. Menos vacina vencida sem aviso e menos risco de prescrever algo que conflita com uma medicação em uso.
+
+**Para a CLYVO VET.** Uma base centralizada abre caminho pra uma rede de clínicas parceiras e pra inteligência de mercado: sazonalidade de atendimentos, cobertura vacinal por região, padrões de doença.
+
+**Para o time de desenvolvimento (foco da disciplina).**
+
+- **Entrega em minutos, sem passo manual.** Do `git push` à versão nova no ar, sem ninguém abrir o portal ou copiar arquivo.
+- **Nada quebrado chega em produção.** Se um único teste falhar, a CI fica vermelha, o artefato não é gerado e o CD nem começa.
+- **Rastreabilidade.** Cada versão publicada aponta pro commit, pra execução da CI e pro artefato que a geraram.
+- **Segurança.** Senhas e chaves ficam só no Azure DevOps, mascaradas nos logs. O repositório pode ser aberto pra qualquer pessoa sem expor nada.
+- **Ambiente reprodutível.** Os scripts de infraestrutura e as pipelines estão versionados: qualquer integrante recria tudo do zero seguindo este README.
 
 ---
 
-# Tratamento de erros
+## Stack de tecnologias
 
-Nenhum controller tem `try/catch`. Toda exceção sobe até o `GlobalExceptionHandler`, que escolhe o status certo e responde no padrão **ProblemDetails** (`application/problem+json`):
-
-| Exceção | Status |
+| Camada | Tecnologia |
 |---|---|
-| `RegraDeNegocioException` (ex: pet com tutor que não existe) | 400 Bad Request |
-| `CredenciaisInvalidasException` (login com senha errada) | 401 Unauthorized |
-| `DbUpdateException` (CPF repetido, excluir tutor que tem pet...) | 409 Conflict |
-| Qualquer outra coisa | 500, com mensagem genérica |
-
-Exemplo real, cadastrando um tutor com CPF que já existe:
-
-![Erro 409 no Swagger](docs/screenshots/erro-409.png)
-
-O `correlationId` também volta no header `X-Correlation-Id`. Com ele dá pra achar no log tudo o que aconteceu naquela requisição. Erro 500 vai pro log com a stack trace inteira, mas **nunca** aparece detalhe interno na resposta pro cliente.
-
----
-
-# Auditoria com MongoDB
-
-A API usa **dois bancos**, cada um no que faz melhor:
-
-- **Oracle** guarda os dados de negócio (tutores, pets, consultas...), que têm relacionamento forte e regra de integridade.
-- **MongoDB** guarda a **auditoria**: um log que só cresce, sem relacionamento, consultado por entidade e data. Caso clássico de banco de documentos.
-
-Toda criação, atualização e exclusão das 6 entidades (e o cadastro de usuários) gera um documento na coleção `auditoria`:
-
-```json
-{
-  "_id": { "$oid": "6abc75296803226ad69ddb17" },
-  "Entidade": "Tutor",
-  "EntidadeId": 63,
-  "Acao": "CRIACAO",
-  "Descricao": "Tutor Murillo Sprint Quatro cadastrado",
-  "DataHora": { "$date": "2026-09-30T02:34:17Z" }
-}
-```
-
-**A auditoria nunca derruba a operação principal.** Se o MongoDB cair, o cadastro no Oracle acontece normal e a falha fica registrada no log como `Warning`.
-
-Dá pra consultar de dois jeitos:
-
-- **Pela API:** `GET /api/Auditoria` (paginado, com filtros) e `GET /api/Auditoria/{entidade}/{id}` (histórico de um registro). Só Admin.
-- **Pelo Mongo Express:** http://localhost:8081 → banco `petcare360` → coleção `auditoria`
-
-![Auditoria no Mongo Express](docs/screenshots/mongo-express.png)
+| Aplicação | .NET 10, ASP.NET Core Web API, Clean Architecture |
+| Persistência relacional | Entity Framework Core 10 + Oracle (provider `Oracle.EntityFrameworkCore`) |
+| Persistência NoSQL | MongoDB.Driver → Azure Cosmos DB for MongoDB 6.0 |
+| Segurança | JWT Bearer, PBKDF2-SHA256 |
+| Documentação | Swagger / OpenAPI |
+| Observabilidade | Serilog, OpenTelemetry, Health Checks |
+| Testes | xUnit, Moq, WebApplicationFactory, EF Core InMemory, Coverlet |
+| Controle de versão | Git + GitHub (branch `master`) |
+| CI/CD | **Azure DevOps** — Azure Pipelines (YAML), Pipeline Artifacts, Library, Environments |
+| Nuvem da aplicação | **Azure Web App** (App Service Linux, plano F1) |
+| Bancos em nuvem | **Oracle Database da FIAP** + **Azure Cosmos DB** |
+| Infraestrutura | Azure CLI (scripts versionados) |
 
 ---
 
-# Monitoramento e Observabilidade
+## Arquitetura e fluxo CI/CD
 
-## Health Checks
+![Arquitetura PetCare 360](docs/arquitetura.png)
 
-A API expõe quatro endpoints de saúde, seguindo a divisão de probes usada em Docker e Kubernetes:
+> O arquivo editável do diagrama está em [`docs/arquitetura.drawio`](docs/arquitetura.drawio) (abre no [draw.io](https://app.diagrams.net)).
 
-| Endpoint | Tipo | O que responde | Depende de |
-|---|---|---|---|
-| `/health/live` | Liveness | A aplicação está viva? | nada |
-| `/health/ready` | Readiness | A aplicação está pronta pra receber tráfego? | Oracle e MongoDB |
-| `/health/startup` | Startup | A aplicação terminou de inicializar? | Oracle |
-| `/health` | Geral | Roda os três de uma vez | Oracle e MongoDB |
+### Esteira de CI/CD (passos 1 a 9)
 
-**Por que separar.** O liveness responde 200 na hora, sem tocar em dependência nenhuma — se ele falhar, o processo travou e precisa ser reiniciado. O readiness verifica os bancos: se o Oracle ou o MongoDB cair, a aplicação continua viva mas não deveria receber requisições, e o orquestrador tira ela do balanceador sem matar o container. O startup checa se as migrations foram aplicadas, porque a API sobe normalmente com o banco vazio e só quebraria na primeira requisição.
+1. O **desenvolvedor** faz `git push` na branch `master` do GitHub.
+2. O push **dispara automaticamente** a pipeline **PetCare360-CI** no Azure Pipelines.
+3. A CI roda num agente Microsoft-hosted (`ubuntu-24.04`): restaura os pacotes, compila em Release e executa os **122 testes** com cobertura de código.
+4. Com tudo verde, a CI gera o pacote da API (`dotnet publish`) e **publica o artefato** `petcare360-api` no Azure DevOps.
+5. O artefato novo **dispara automaticamente** a pipeline **PetCare360-CD**.
+6. A CD lê as credenciais protegidas do Variable Group **`vg-petcare360-secrets`** (Library).
+7. A CD se autentica na Azure pela Service Connection **`sc-azure-petcare360`** (Workload Identity Federation, sem senha).
+8. A CD grava os segredos como **App Settings** do Web App e faz o **deploy** do pacote.
+9. Um **smoke test** chama `GET /health/live` até a API responder `200`, provando que a versão nova subiu.
 
-**Checks implementados:**
+### Fluxo da aplicação em produção (A, B e C)
 
-- `self` (tag `live`) — retorna Healthy imediatamente
-- `oracle-database` (tag `ready`) — usa `AddDbContextCheck` pra confirmar que o EF consegue conversar com o Oracle
-- `mongodb` (tag `ready`) — check customizado que manda um `ping` pro MongoDB
-- `migrations` (tag `startup`) — check customizado que verifica se há migrations pendentes
+- **A.** O usuário final (tutor, clínica, Swagger ou Postman) chama a API por **HTTPS**, com o token **JWT** no header.
+- **B.** A cada criação, alteração ou exclusão, a API grava um registro de **auditoria** no **Cosmos DB**.
+- **C.** Os dados do domínio são lidos e gravados no **Oracle da FIAP** via Entity Framework Core.
 
-**Exemplo de resposta do `/health/ready`:**
+### Personas
 
-```json
-{
-  "status": "Healthy",
-  "totalDuration": "00:00:00.0612331",
-  "entries": {
-    "oracle-database": {
-      "duration": "00:00:00.0412331",
-      "status": "Healthy",
-      "tags": ["ready"]
-    },
-    "mongodb": {
-      "duration": "00:00:00.0034120",
-      "status": "Healthy",
-      "tags": ["ready"]
-    }
-  }
-}
-```
-
-O `/health/live` devolve só o texto `Healthy`, sem JSON, porque probe de liveness tem que ser o mais leve possível.
-
-**Como usar na prática.** Aponta o healthcheck do Docker ou o liveness probe do Kubernetes pro `/health/live`, e o readiness probe pro `/health/ready`. Um monitor externo pode bater no `/health` de tempos em tempos e alertar quando o status sair de `Healthy`.
-
-## Logs
-
-Os logs são estruturados com **Serilog** e saem em dois lugares:
-
-- **Console** — durante o desenvolvimento
-- **Arquivo** — em `logs/petcare360-AAAAMMDD.log`, com um arquivo por dia
-
-Log estruturado significa que a mensagem não é texto solto: os valores viram campos pesquisáveis. Em vez de concatenar string, o código usa template com placeholder nomeado:
-
-```csharp
-_logger.LogInformation("Pet cadastrado com sucesso: {@Pet}", pet);
-```
-
-O `{@Pet}` serializa o objeto inteiro. Numa ferramenta de log dá pra filtrar por `Pet.Especie` sem precisar fazer regex em cima de texto.
-
-**Correlação de requisições.** Todo request recebe um `CorrelationId`, gerado pelo `CorrelationIdMiddleware`. Ele aparece entre colchetes em toda linha de log daquela requisição e também volta no header `X-Correlation-Id` da resposta (inclusive nas respostas de erro). Se o cliente já mandar esse header, a API reaproveita o valor — assim o mesmo id atravessa app mobile, API e qualquer serviço no meio.
-
-Exemplo de saída:
-
-```
-[22:32:20 INF] [8c6b7a2b-2485-4b35-b389-ece4eb268889] Tutor cadastrado com sucesso: {"IdTutor": 1, "NmTutor": "Diego Fontes", ...}
-[22:32:20 INF] [8c6b7a2b-2485-4b35-b389-ece4eb268889] HTTP POST /api/Tutores responded 201 in 98.9586 ms
-```
-
-As duas linhas têm o mesmo id, então dá pra saber que pertencem à mesma chamada mesmo com várias requisições simultâneas.
-
-**Níveis usados:** `Information` pra operações concluídas, `Warning` pra regra de negócio violada, requisição recusada (4xx) ou falha ao gravar auditoria, `Error` pra falhas inesperadas e `Fatal` se a aplicação não conseguir subir.
-
-## Tracing e Métricas
-
-Configurados com **OpenTelemetry**, exportando pro console.
-
-**Tracing** responde "por onde a requisição passou". Cada chamada HTTP gera um trace com um `TraceId`, e dentro dele cada etapa vira um span com `SpanId` e `ParentSpanId`. As operações de negócio criam spans próprios via `ActivitySource`:
-
-| Span | Onde acontece |
+| Persona | Onde atua |
 |---|---|
-| `CadastrarPet` | PetService.CreateAsync |
-| `ConsultarHistoricoPet` | PetService.GetHistoricoAsync |
-| `CadastrarTutor` | TutorService.CreateAsync |
-| `CadastrarClinica` | ClinicaService.CreateAsync |
-| `RegistrarConsulta` | ConsultaService.CreateAsync |
-| `RegistrarVacina` | VacinaService.CreateAsync |
-| `PrescreverMedicamento` | MedicamentoService.CreateAsync |
-
-Cada span carrega tags com o contexto do negócio (`pet.nome`, `pet.especie`, `consulta.clinica`). Assim, num POST de pet, dá pra ver quanto tempo foi HTTP, quanto foi regra de negócio e quanto foi banco. O mesmo `traceId` volta no corpo das respostas de erro.
-
-**Métricas** respondem "como o sistema está no agregado". Vêm de duas fontes.
-
-Automáticas, do ASP.NET Core:
-- `http.server.request.duration` — histograma de tempo de resposta, quebrado por rota e status code. É daqui que sai o **tempo de resposta** e, olhando os status 4xx e 5xx, a **taxa de erros**.
-- `http.server.active_requests` — requisições em andamento
-- `aspnetcore.routing.match_attempts` — contagem por rota
-
-Customizadas, do domínio:
-- `pets_created_total` — com a espécie como tag, dá pra saber quantos cães e quantos gatos
-- `tutores_created_total`
-- `clinicas_created_total`
-- `consultas_created_total`
-- `vacinas_created_total`
-- `medicamentos_created_total`
-
-Os três tipos de métrica aparecem: **Counter** nos contadores de negócio, **Histogram** na duração das requisições e **Gauge** (`LongSumNonMonotonic`) nas requisições ativas.
-
-Pra ver tudo funcionando, sobe a API e faz qualquer chamada — o console mostra o trace completo e, a cada intervalo, o dump das métricas.
+| **Desenvolvedor** | Escreve o código no VS Code e faz push no GitHub. Acompanha as execuções no Azure DevOps. |
+| **Professor** | Acessa o projeto no Azure DevOps com nível **Basic**: Repos, Pipelines, artefatos, testes e Boards. |
+| **Usuário final** | Tutor do pet e clínica veterinária, consumindo a API pelo app ou pelo Swagger. |
 
 ---
 
-# Testes
+## Banco de dados em nuvem
 
-São **122 testes automatizados**, todos no padrão **AAA** (Arrange, Act, Assert), separados em dois projetos.
+O projeto usa **dois bancos em nuvem**, cada um com um papel claro.
 
-## Como rodar
+### Oracle Database da FIAP — domínio veterinário
 
-Todos:
+Banco relacional principal (`oracle.fiap.com.br:1521/ORCL`), aceito na lista do enunciado como "Oracle da FIAP". As tabelas são criadas pelas **migrations do Entity Framework Core** e o DDL completo, com comentários em todas as tabelas e colunas, está em [`db/script_bd.sql`](db/script_bd.sql).
 
-```powershell
-dotnet test
-```
-
-Só os unitários:
-
-```powershell
-dotnet test PetCare360.UnitTests
-```
-
-Só os de integração:
-
-```powershell
-dotnet test PetCare360.IntegrationTests
-```
-
-Com mais detalhe na saída:
-
-```powershell
-dotnet test --logger "console;verbosity=detailed"
-```
-
-No Visual Studio: menu **Teste** → **Gerenciador de Testes**.
-
-## Testes Unitários (87 testes)
-
-Ficam em `PetCare360.UnitTests` e exercitam as camadas de **Domínio e Aplicação**. Nenhum encosta no banco: as dependências são substituídas por mocks do **Moq**.
-
-```
-PetCare360.UnitTests/
-├── Fixtures/
-│   └── TelemetryFixture.cs              ← IMeterFactory compartilhado via ICollectionFixture
-├── Services/
-│   ├── PetServiceTests.cs               ← 10 testes
-│   ├── TutorServiceTests.cs             ← 6 testes
-│   ├── ClinicaServiceTests.cs           ← 7 testes
-│   ├── ConsultaServiceTests.cs          ← 8 testes
-│   ├── VacinaServiceTests.cs            ← 6 testes
-│   ├── MedicamentoServiceTests.cs       ← 6 testes
-│   ├── AuthServiceTests.cs              ← 5 testes
-│   └── AuditoriaServiceTests.cs         ← 4 testes
-├── Domain/
-│   ├── PagedResultTests.cs              ← 6 testes
-│   └── QueryParametersTests.cs          ← 6 testes
-├── Security/
-│   ├── Pbkdf2SenhaHasherTests.cs        ← 5 testes
-│   └── JwtTokenServiceTests.cs          ← 2 testes
-├── Hateoas/
-│   └── HateoasBuilderTests.cs           ← 5 testes
-├── Handlers/
-│   └── GlobalExceptionHandlerTests.cs   ← 5 testes
-└── Controllers/
-    └── PetsControllerTests.cs           ← 6 testes
-```
-
-**Nomenclatura:** todos seguem `MetodoTestado_Cenario_ResultadoEsperado`. Exemplos:
-
-- `CreateAsync_TutorNaoExiste_LancaRegraDeNegocioException`
-- `UpdateAsync_ClinicaNaoExiste_RetornaFalseSemAuditar`
-- `RegistrarAsync_MongoIndisponivel_NaoPropagaExcecao`
-- `TryHandleAsync_DbUpdateException_RetornaConflict`
-
-**Fixture:** os services recebem um `IMeterFactory` no construtor pra registrar métricas. Criar um provider novo a cada teste seria desperdício, então a `TelemetryFixture` cria um só e o xUnit compartilha entre as classes através da `[CollectionDefinition("ServicesCollection")]`.
-
-**Verificação de chamadas:** além dos asserts no retorno, os testes usam `Verify` pra checar se o service chamou (ou deixou de chamar) o repositório e a auditoria. É o que prova, por exemplo, que quando o tutor não existe o pet realmente **não** foi gravado:
-
-```csharp
-_mockPetRepository.Verify(r => r.AddAsync(It.IsAny<Pet>()), Times.Never);
-```
-
-## Testes de Integração (35 testes)
-
-Ficam em `PetCare360.IntegrationTests` e sobem a **API inteira em memória** com `WebApplicationFactory`, disparando requisições HTTP reais.
-
-```
-PetCare360.IntegrationTests/
-├── FactoryFixture/
-│   └── ApiFactoryFixture.cs                    ← sobe a API, troca os bancos e gera o token
-├── Fakes/
-│   └── FakeAuditoriaRepository.cs              ← auditoria em memória no lugar do MongoDB
-└── Integration/
-    ├── TutoresControllerIntegrationTests.cs    ← 5 testes
-    ├── PetsControllerIntegrationTests.cs       ← 6 testes
-    ├── PaginacaoIntegrationTests.cs            ← 5 testes
-    ├── HateoasIntegrationTests.cs              ← 3 testes
-    ├── AuditoriaIntegrationTests.cs            ← 2 testes
-    ├── AuthIntegrationTests.cs                 ← 6 testes
-    ├── AutorizacaoIntegrationTests.cs          ← 6 testes
-    └── HealthCheckIntegrationTests.cs          ← 2 testes
-```
-
-**Substituição de dependências:** a `ApiFactoryFixture` troca tudo o que é externo:
-
-- o Oracle vira um banco **InMemory**
-- o MongoDB vira o `FakeAuditoriaRepository`, e o health check dele é removido
-- todo cliente HTTP já sai com um **token JWT de Admin**, gerado pelo próprio `ITokenService` da aplicação. Os testes de segurança usam clientes sem token ou com perfil Usuario.
-
-Assim os testes rodam em qualquer máquina, sem depender do banco da FIAP nem do Docker estar no ar.
-
-**O que é validado:** fluxo HTTP completo, respostas de sucesso (200, 201, 204), erros (400, 401, 403, 404), paginação e filtros pela URL, links HATEOAS, auditoria sendo gravada, login e permissões por perfil, e os endpoints de health check.
-
-O teste `CicloCompleto_CriarAtualizarEDeletar_FunicionaDePontaAPonta` faz o caminho inteiro numa tacada: cria um pet, atualiza, consulta pra confirmar a alteração, deleta e confirma que sumiu. E o `ExcluirTutor_PerfilUsuario_RetornaForbidden` prova que um usuário comum não consegue excluir, e que o tutor continua lá depois da tentativa.
-
-> **Observação:** o `/health/startup` não é coberto pelos testes de integração porque ele verifica migrations pendentes, e o provedor InMemory não trabalha com migrations. Esse endpoint se valida rodando contra o Oracle de verdade.
-
-## Cobertura de código
-
-A cobertura foi medida nas camadas de **Domínio e Aplicação**:
-
-| Camada | Cobertura de linhas |
+| Tabela | Conteúdo |
 |---|---|
-| PetCare360.Domain | **98,3%** |
-| PetCare360.Application | **90,5%** |
-| **Total** | **92,1%** (549 de 596 linhas) |
-| Branches | 77,9% |
-
-O relatório completo, classe por classe, está em [`docs/cobertura/index.html`](docs/cobertura/index.html).
-
-![Relatório de cobertura](docs/screenshots/cobertura.png)
-
-Pra gerar o relatório de novo:
-
-```powershell
-dotnet tool install -g dotnet-reportgenerator-globaltool
-dotnet test --collect:"XPlat Code Coverage" --results-directory ./TestResults
-reportgenerator -reports:"./TestResults/**/coverage.cobertura.xml" -targetdir:"./docs/cobertura" -reporttypes:"Html;TextSummary" -assemblyfilters:"+PetCare360.Domain;+PetCare360.Application"
-```
-
----
-
-# Como testar no Swagger (roteiro pra demonstrar tudo funcionando)
-
-Segue essa ordem pra ver a API funcionando ponta-a-ponta. Os IDs retornados nos POSTs (1, 2, 3...) você usa nos passos seguintes.
-
-### 1. Fazer login — `POST /api/Auth/login`
-
-```json
-{
-  "email": "admin@petcare360.com",
-  "senha": "Admin@123"
-}
-```
-
-Copia o `token`, clica em **Authorize** e cola. Sem isso, todos os passos abaixo voltam 401.
-
-### 2. Criar um tutor — `POST /api/Tutores`
-
-```json
-{
-  "nmTutor": "Murillo Silva",
-  "cpf": "123.456.789-00",
-  "email": "murillo@email.com",
-  "telefone": "(11) 99999-1111",
-  "endereco": "Rua dos Pets, 360"
-}
-```
-
-### 3. Criar uma clínica — `POST /api/Clinicas`
-
-```json
-{
-  "nmClinica": "Clínica Pet Center",
-  "cnpj": "12.345.678/0001-99",
-  "endereco": "Av. Paulista, 1500",
-  "telefone": "(11) 3000-0001",
-  "email": "contato@petcenter.com"
-}
-```
-
-### 4. Criar um pet (usando o `idTutor` do passo 2) — `POST /api/Pets`
-
-```json
-{
-  "nmPet": "Rex",
-  "especie": "Cachorro",
-  "raca": "Labrador",
-  "dtNascimento": "2020-05-10T00:00:00",
-  "peso": 28.5,
-  "idTutor": 1
-}
-```
-
-### 5. Criar uma consulta — `POST /api/Consultas`
-
-```json
-{
-  "dtConsulta": "2026-05-20T14:00:00",
-  "descricao": "Consulta de rotina",
-  "diagnostico": "Pet saudável",
-  "idPet": 1,
-  "idClinica": 1
-}
-```
-
-### 6. Cadastrar uma vacina — `POST /api/Vacinas`
-
-```json
-{
-  "nmVacina": "V10",
-  "fabricante": "Zoetis",
-  "dtAplicacao": "2026-05-20T00:00:00",
-  "dtProximaDose": "2027-05-20T00:00:00",
-  "idPet": 1,
-  "idConsulta": 1
-}
-```
-
-### 7. Cadastrar um medicamento — `POST /api/Medicamentos`
-
-```json
-{
-  "nmMedicamento": "Vermífugo",
-  "dosagem": "1 comprimido",
-  "frequencia": "A cada 6 meses",
-  "dtInicio": "2026-05-20T00:00:00",
-  "dtFim": "2026-05-20T00:00:00",
-  "idPet": 1,
-  "idConsulta": 1
-}
-```
-
-### 8. Ver o histórico completo do pet — `GET /api/Pets/1/historico`
-
-Esse endpoint traz o pet com **todas as consultas, vacinas e medicamentos** juntos, mais os links HATEOAS. É o coração da API.
-
-### 9. Testar paginação e filtros — `GET /api/Pets`
-
-Preenche `Especie = Cachorro`, `OrdenarPor = nome` e `TamanhoPagina = 2`. Na resposta, repara nos links `next` e `last` e no `totalPaginas`.
-
-### 10. Ver a auditoria — `GET /api/Auditoria`
-
-Aparecem os registros de `CRIACAO` de tudo o que você cadastrou nos passos anteriores. Dá pra conferir também no Mongo Express (http://localhost:8081).
-
-### 11. Testar erros propositais (mostra que as validações funcionam)
-
-- `GET /api/Tutores/999` → retorna **404 NotFound** ("Tutor não encontrado")
-- `POST /api/Pets` com `idTutor: 999` (tutor inexistente) → retorna **400 BadRequest** com a mensagem "O tutor informado não existe."
-- `POST /api/Tutores` repetindo o CPF do passo 2 → retorna **409 Conflict** em ProblemDetails
-- `DELETE /api/Tutores/1` (tutor com pets vinculados) → retorna **409 Conflict** porque a regra de FK proíbe deletar tutores que têm pets cadastrados
-
-### 12. Testar as permissões
-
-1. Clica em **Authorize → Logout** e executa `GET /api/Pets` → **401**
-2. Cria um usuário comum em `POST /api/Auth/registrar`:
-   ```json
-   {
-     "nome": "Usuario Comum",
-     "email": "comum@petcare360.com",
-     "senha": "comum123"
-   }
-   ```
-3. Faz login com ele e autoriza com o token novo
-4. `GET /api/Pets` funciona ✅, mas `DELETE /api/Pets/1` e `GET /api/Auditoria` voltam **403** ❌
-
-### 13. Conferir a observabilidade
-
-Depois de fazer essas chamadas, olha o console da aplicação: vão estar lá os logs do Serilog com o correlation id, os spans do OpenTelemetry (`CadastrarPet`, `RegistrarVacina`) e o dump das métricas com os contadores. E acessa `/health/ready` pra ver o Oracle e o MongoDB respondendo.
-
----
-
-# Prints do Swagger
-
-Pra ter uma ideia do que esperar antes de rodar, segue como a interface fica:
-
-![Swagger](docs/screenshots/swagger-1.png)
-
-![Swagger](docs/screenshots/swagger-2.png)
-
-![Swagger](docs/screenshots/swagger-3.png)
-
-A especificação OpenAPI completa também foi **exportada** pra [`docs/swagger.json`](docs/swagger.json). Dá pra importar no Postman ou no Insomnia sem precisar rodar a API. Pra exportar de novo, com a API rodando, é só abrir `/swagger/v1/swagger.json` e salvar.
-
----
-
-# Endpoints disponíveis
-
-A documentação interativa completa está no Swagger depois de rodar a aplicação. Resumo das rotas:
-
-> 🔒 = precisa estar logado · 👑 = só Admin
-
-### Auth — `/api/Auth`
-- `POST /api/Auth/registrar` — cria um usuário com perfil Usuario (público)
-- `POST /api/Auth/login` — faz login e devolve o token (público)
-- `GET /api/Auth/me` — dados do usuário logado 🔒
-
-### Tutores — `/api/Tutores`
-- `GET /api/Tutores` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Tutores/{id}` — busca por ID 🔒
-- `POST /api/Tutores` — cria 🔒
-- `PUT /api/Tutores/{id}` — atualiza 🔒
-- `DELETE /api/Tutores/{id}` — remove 👑
-
-### Pets — `/api/Pets`
-- `GET /api/Pets` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Pets/{id}` — busca por ID 🔒
-- `GET /api/Pets/tutor/{tutorId}` — lista pets de um tutor 🔒
-- `GET /api/Pets/especie/{especie}` — filtra por espécie 🔒
-- `GET /api/Pets/{id}/historico` — pet + consultas + vacinas + medicamentos ⭐ 🔒
-- `POST /api/Pets` — cria 🔒
-- `PUT /api/Pets/{id}` — atualiza 🔒
-- `DELETE /api/Pets/{id}` — remove 👑
-
-### Clínicas — `/api/Clinicas`
-- `GET /api/Clinicas` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Clinicas/{id}` — busca por ID 🔒
-- `GET /api/Clinicas/cnpj/{cnpj}` — busca por CNPJ 🔒
-- `POST /api/Clinicas` — cria 🔒
-- `PUT /api/Clinicas/{id}` — atualiza 🔒
-- `DELETE /api/Clinicas/{id}` — remove 👑
-
-### Consultas — `/api/Consultas`
-- `GET /api/Consultas` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Consultas/{id}` — busca por ID 🔒
-- `GET /api/Consultas/pet/{petId}` — consultas de um pet 🔒
-- `GET /api/Consultas/clinica/{clinicaId}` — consultas de uma clínica 🔒
-- `POST /api/Consultas` — cria 🔒
-- `PUT /api/Consultas/{id}` — atualiza 🔒
-- `DELETE /api/Consultas/{id}` — remove 👑
-
-### Vacinas — `/api/Vacinas`
-- `GET /api/Vacinas` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Vacinas/{id}` — busca por ID 🔒
-- `GET /api/Vacinas/pet/{petId}` — vacinas de um pet 🔒
-- `POST /api/Vacinas` — cria 🔒
-- `PUT /api/Vacinas/{id}` — atualiza 🔒
-- `DELETE /api/Vacinas/{id}` — remove 👑
-
-### Medicamentos — `/api/Medicamentos`
-- `GET /api/Medicamentos` — lista paginada, com filtros e ordenação 🔒
-- `GET /api/Medicamentos/{id}` — busca por ID 🔒
-- `GET /api/Medicamentos/pet/{petId}` — medicamentos de um pet 🔒
-- `POST /api/Medicamentos` — cria 🔒
-- `PUT /api/Medicamentos/{id}` — atualiza 🔒
-- `DELETE /api/Medicamentos/{id}` — remove 👑
-
-### Auditoria — `/api/Auditoria`
-- `GET /api/Auditoria` — registros de auditoria paginados, do mais recente pro mais antigo 👑
-- `GET /api/Auditoria/{entidade}/{entidadeId}` — histórico de um registro (ex: `/api/Auditoria/Pet/1`) 👑
-
-### Health Checks
-- `GET /health/live` — liveness
-- `GET /health/ready` — readiness (Oracle + MongoDB)
-- `GET /health/startup` — startup
-- `GET /health` — todos de uma vez
-
-**Total: 43 endpoints** (38 das 6 entidades + 3 de autenticação + 2 de auditoria), **mais 4 endpoints de monitoramento**.
-
-### Códigos de resposta
-
-| Status | Quando acontece |
-|---|---|
-| 200 OK | Consulta com sucesso |
-| 201 Created | Cadastro com sucesso (o header `Location` aponta pro recurso criado) |
-| 204 No Content | Atualização ou exclusão com sucesso |
-| 400 Bad Request | Dados inválidos ou regra de negócio violada |
-| 401 Unauthorized | Sem token, token vencido ou senha errada no login |
-| 403 Forbidden | Logado, mas sem o perfil necessário |
-| 404 Not Found | Registro não encontrado |
-| 409 Conflict | CPF, e-mail ou CNPJ repetido, ou exclusão bloqueada por vínculo |
-| 500 Internal Server Error | Erro inesperado (sem expor detalhe interno) |
-
----
-
-# Como os dados se ligam
+| `TB_TUTOR` | Tutores responsáveis pelos pets |
+| `TB_PET` | Animais, ligados a um tutor |
+| `TB_CLINICA` | Clínicas veterinárias da rede |
+| `TB_CONSULTA` | Atendimentos (pet + clínica) |
+| `TB_VACINA` | Vacinas aplicadas |
+| `TB_MEDICAMENTO` | Medicamentos prescritos |
+| `TB_USUARIO_PETCARE` | Usuários da API (login JWT) |
 
 ```
-TB_TUTOR (1) ─────┐
-                  │ N
-                  ▼
-TB_PET (1) ──┬──→ TB_CONSULTA (N) ←── TB_CLINICA (1)
-             │
+TB_TUTOR (1) ──────┐
+                   │ N
+                   ▼
+TB_PET (1) ──┬──→ TB_CONSULTA (N) ←── (1) TB_CLINICA
+             │           │
              ├──→ TB_VACINA (N)
              │
              └──→ TB_MEDICAMENTO (N)
 
-TB_USUARIO_PETCARE (independente — login e perfis)
-
-MongoDB › petcare360 › auditoria (um documento por operação)
+TB_USUARIO_PETCARE   (independente, usada no login)
 ```
 
-Regras de integridade que ficaram explícitas no banco:
+### Azure Cosmos DB for MongoDB — auditoria
 
-- Não dá pra apagar um tutor que ainda tem pets cadastrados (apaga os pets primeiro)
-- Não dá pra apagar uma clínica que tem histórico de consultas (preserva histórico)
-- CPF e email do tutor são únicos no sistema
-- CNPJ da clínica é único
-- E-mail do usuário é único
-
-E as regras que ficam na camada de aplicação:
-
-- Pet só pode ser cadastrado com um tutor que existe
-- Consulta exige pet e clínica existentes
-- Vacina e medicamento exigem um pet existente
-- Não dá pra cadastrar dois usuários com o mesmo e-mail
+Conta `cosmos-petcare360-rm564969`, com API do MongoDB **6.0** e **free tier**. Guarda a coleção `auditoria` do banco `petcare360`: um documento por operação, com entidade, id, ação, descrição e data/hora. A coleção tem índice em `DataHora`, que é usado na ordenação da rota `GET /api/Auditoria`.
 
 ---
 
-# Estrutura do código
+## Projeto no Azure DevOps
 
-O projeto está dividido em 4 camadas, mais 2 projetos de teste (a explicação de cada uma está na seção [Arquitetura](#arquitetura)).
+| Item | Configuração |
+|---|---|
+| Organização | `RM564969` |
+| Project name | `Sprint 4 - Azure DevOps` |
+| Description | Projeto para entrega da Sprint 4 do professor Antonio Sergio Rodrigues Figueiredo + integrantes (RM - nome - turma) |
+| Visibility | **Private** |
+| Version control | **Git** |
+| Work item process | **Agile** |
+| Acesso do professor | Convidado com nível **Basic** e incluído em **Project Administrators** |
+| Paralelismo | Free tier: 1 parallel job Microsoft-hosted para projetos privados |
+
+Recursos usados dentro do projeto:
+
+| Recurso | Nome | Onde ver |
+|---|---|---|
+| Pipeline de CI | `PetCare360-CI` | Pipelines → Pipelines |
+| Pipeline de CD | `PetCare360-CD` | Pipelines → Pipelines |
+| Environment | `petcare360-producao` | Pipelines → Environments |
+| Variable Group | `vg-petcare360-secrets` | Pipelines → Library |
+| Service Connection | `sc-azure-petcare360` | Project settings → Service connections |
+| Conexão com o GitHub | App Azure Pipelines | Project settings → GitHub connections |
+
+---
+
+## Pipeline de CI
+
+Arquivo: [`pipelines/ci.yml`](pipelines/ci.yml) · Pipeline: **PetCare360-CI**
+
+**Gatilho:** qualquer push na branch `master`.
+
+```yaml
+trigger:
+  branches:
+    include:
+      - master
+```
+
+| # | Etapa | O que faz |
+|---|---|---|
+| 1 | Instalar o SDK do .NET 10 | `UseDotNet@2` garante a mesma versão do .NET usada no desenvolvimento |
+| 2 | Restaurar dependências (NuGet) | `dotnet restore` da solução `src/PetCare360.API.slnx` |
+| 3 | Compilar a solução | `dotnet build` em **Release**, sem restaurar de novo |
+| 4 | Executar testes unitários e de integração | `dotnet test` com coleta de cobertura (`XPlat Code Coverage`). Os resultados aparecem na aba **Tests** |
+| 5 | Publicar a cobertura de código | `PublishCodeCoverageResults@2` — aba **Code Coverage** |
+| 6 | Gerar o pacote da API | `dotnet publish` do projeto da API, compactado em `.zip` |
+| 7 | Publicar o artefato no Azure DevOps | `PublishPipelineArtifact@1` com o nome **`petcare360-api`** |
+
+Se qualquer etapa falhar, inclusive um único teste, a execução fica vermelha e **nenhum artefato é publicado**. Assim o CD não roda.
+
+---
+
+## Pipeline de CD
+
+Arquivo: [`pipelines/cd.yml`](pipelines/cd.yml) · Pipeline: **PetCare360-CD**
+
+**Gatilho:** conclusão de uma execução da CI na `master`, ou seja, um **novo artefato gerado**. O CD não tem gatilho de commit (`trigger: none`); ele só reage ao CI.
+
+```yaml
+resources:
+  pipelines:
+    - pipeline: ci
+      source: PetCare360-CI
+      trigger:
+        branches:
+          include:
+            - master
+```
+
+O deploy roda como um **deployment job** no Environment `petcare360-producao`, o que deixa o histórico de versões publicadas visível em Pipelines → Environments.
+
+| # | Etapa | O que faz |
+|---|---|---|
+| 1 | Baixar o artefato gerado pelo CI | `download: ci` — pega exatamente o pacote que passou nos testes |
+| 2 | Configurar as variáveis de ambiente protegidas | `AzureAppServiceSettings@1` grava os segredos do Variable Group como App Settings do Web App |
+| 3 | Publicar a API no Azure Web App | `AzureWebApp@1` faz o deploy do `.zip` no Web App Linux com runtime .NET 10 |
+| 4 | Validar a API publicada (smoke test) | Chama `GET /health/live` até 20 vezes; só fica verde quando a API responde `200` |
+
+---
+
+## Regras da pipeline atendidas
+
+| Regra do enunciado | Como foi atendida |
+|---|---|
+| I. Configurada e conectada ao repositório | Pipelines YAML no repositório do GitHub, conectado pelo app Azure Pipelines |
+| II. CI dispara a cada alteração na `master` | `trigger.branches.include: master` no `ci.yml` |
+| III. CD dispara após novo artefato gerado | `resources.pipelines` com `trigger` apontando pro `PetCare360-CI` no `cd.yml` |
+| IV. Variáveis sensíveis protegidas | Variable Group `vg-petcare360-secrets` com os 4 valores marcados como **secret** 🔒 |
+| V. Geração e publicação do artefato | `dotnet publish` + `PublishPipelineArtifact` → artefato `petcare360-api` |
+| VI. Etapa de execução de testes | `dotnet test` com **122 testes** (87 unitários + 35 de integração) e cobertura |
+| VII. Deploy em Azure Web App ou ACI | `AzureWebApp@1` → **Azure Web App** `petcare360-rm564969` |
+
+---
+
+## Variáveis de ambiente protegidas
+
+**Nenhuma credencial está no código, no `appsettings.json` ou nos arquivos YAML.** O `appsettings.json` versionado tem os campos sensíveis vazios.
+
+As credenciais ficam no Variable Group **`vg-petcare360-secrets`** (Pipelines → Library), todas com o cadeado 🔒 fechado:
+
+| Variável | Uso na aplicação |
+|---|---|
+| `ORACLE_CONNECTION` | `ConnectionStrings__OracleConnection` — usuário e senha do Oracle da FIAP |
+| `MONGO_CONNECTION` | `MongoDbSettings__ConnectionString` — chave de acesso do Cosmos DB |
+| `JWT_KEY` | `Jwt__Key` — chave de assinatura dos tokens JWT |
+| `ADMIN_SENHA` | `AdminPadrao__Senha` — senha do administrador criado na primeira subida |
+
+Como isso protege os dados:
+
+- **Mascaramento nos logs.** O Azure DevOps troca qualquer valor secreto por `***` nas saídas das execuções.
+- **Permissão explícita.** O Variable Group só pode ser usado por pipelines autorizadas. Na primeira execução do CD o acesso foi liberado manualmente (Permit).
+- **Service Connection sem senha.** A conexão com a Azure usa **Workload Identity Federation**: não existe client secret pra vazar ou expirar.
+- **Testes isolados.** Os testes de integração usam uma chave e uma senha falsas, definidas só dentro do `ApiFactoryFixture`, com banco InMemory.
+- **Desenvolvimento local** usa o **User Secrets** do .NET, guardado fora da pasta do projeto.
+
+---
+
+## Infraestrutura via Azure CLI
+
+Todos os recursos da Azure foram criados por linha de comando, com scripts versionados em `scripts/`. Os nomes ficam centralizados em `scripts/00-variaveis.sh`.
+
+| Recurso | Nome | Script |
+|---|---|---|
+| Resource Group | `rg-petcare360-sprint4` (South Africa North) | `01-criar-webapp.sh` |
+| App Service Plan | `plan-petcare360-sprint4` — Linux, **F1 gratuito** | `01-criar-webapp.sh` |
+| Web App | `petcare360-rm564969` — runtime **.NET 10**, HTTPS only | `01-criar-webapp.sh` |
+| Cosmos DB for MongoDB | `cosmos-petcare360-rm564969` — **6.0**, free tier | `02-criar-cosmosdb.sh` |
+| Banco + coleção | `petcare360` / `auditoria` com índice em `DataHora` | `02-criar-cosmosdb.sh` |
+| Remoção de tudo | Resource Group inteiro | `99-limpar-tudo.sh` |
+
+A região **South Africa North** foi escolhida porque a assinatura **Azure for Students** da FIAP só libera cinco regiões (`chilecentral`, `southafricanorth`, `southcentralus`, `centralus`, `canadacentral`), e é a mesma região usada na Sprint 3.
+
+---
+
+## Como reproduzir do zero (How To)
+
+### Pré-requisitos
+
+| Ferramenta | Verificação |
+|---|---|
+| Git | `git --version` |
+| .NET SDK 10 | `dotnet --list-sdks` |
+| Azure CLI | `az --version` |
+| Git Bash (pra rodar os scripts `.sh`) | já vem com o Git for Windows |
+| Assinatura Azure ativa | `az login` |
+| Organização no Azure DevOps | `https://dev.azure.com` |
+
+### 1. Clonar o repositório
+
+```bash
+git clone https://github.com/MurilloFernandesCarapia/Challenge-Devops-Sprint4.git
+cd Challenge-Devops-Sprint4
+```
+
+### 2. Criar a infraestrutura na Azure (Git Bash)
+
+```bash
+az login
+az provider register --namespace Microsoft.Web
+az provider register --namespace Microsoft.DocumentDB
+bash scripts/01-criar-webapp.sh
+bash scripts/02-criar-cosmosdb.sh
+```
+
+Depois confira a versão do Cosmos DB:
+
+```bash
+az cosmosdb show --name cosmos-petcare360-rm564969 --resource-group rg-petcare360-sprint4 --query "apiProperties.serverVersion" -o tsv
+```
+
+Se aparecer `3.6`, atualize pelo portal em **Cosmos DB → Settings → Features → Update MongoDB server version → 6.0** (veja [Problemas que enfrentamos](#problemas-que-enfrentamos-e-como-resolvemos)).
+
+### 3. Preparar o banco Oracle
+
+As tabelas são criadas pelas migrations do EF Core. Com a connection string do seu usuário no User Secrets (ver [Rodando localmente](#rodando-localmente-opcional)):
+
+```bash
+dotnet tool install --global dotnet-ef
+dotnet ef database update --project src/PetCare360.Infrastructure --startup-project src/PetCare360.API
+```
+
+O DDL equivalente, comentado, está em `db/script_bd.sql`.
+
+### 4. Configurar o Azure DevOps
+
+1. Criar o projeto **Sprint 4 - Azure DevOps** (Private, Git, Agile).
+2. **Project settings → Service connections → New → Azure Resource Manager** com App registration (automatic), Workload identity federation, escopo no Resource Group `rg-petcare360-sprint4`. Nome: **`sc-azure-petcare360`**, com acesso liberado a todas as pipelines.
+3. **Pipelines → Library → + Variable group** `vg-petcare360-secrets` com `ORACLE_CONNECTION`, `MONGO_CONNECTION`, `JWT_KEY` e `ADMIN_SENHA`, todas como secret 🔒.
+
+A connection string do Cosmos DB sai deste comando:
+
+```bash
+az cosmosdb keys list --type connection-strings --name cosmos-petcare360-rm564969 --resource-group rg-petcare360-sprint4 --query "connectionStrings[0].connectionString" -o tsv
+```
+
+### 5. Criar as pipelines
+
+1. **Pipelines → New pipeline → GitHub → Challenge-Devops-Sprint4 → Existing Azure Pipelines YAML file → `/pipelines/ci.yml`**. Rode e renomeie para **`PetCare360-CI`**.
+2. Repita com **`/pipelines/cd.yml`**, salve e renomeie para **`PetCare360-CD`**.
+3. Rode o CD uma vez manualmente e clique em **Permit** pro Environment e pro Variable Group.
+
+### 6. Ver a esteira funcionando
+
+Qualquer push na `master` agora dispara **CI → artefato → CD → deploy** sozinho:
+
+```bash
+git commit -am "Minha alteração"
+git push
+```
+
+---
+
+## Testando a aplicação na nuvem (CRUD + SELECT)
+
+### 1. Conferir a saúde da aplicação
 
 ```
-Challenge.NET/
-├── PetCare360.Domain/                  ← entidades e contratos. Não depende de ninguém.
-│   ├── Dtos/                           ← LoginRequest, RegistroUsuarioRequest, TokenResponse, UsuarioResponse
-│   ├── Entities/                       ← Tutor, Pet, Clinica, Consulta, Vacina, Medicamento, Usuario, RegistroAuditoria
-│   ├── Exceptions/                     ← RegraDeNegocioException, CredenciaisInvalidasException
-│   ├── Interfaces/                     ← contratos de repositório, service, token e hash de senha
-│   └── Pagination/                     ← QueryParameters, PagedResult e os filtros de cada entidade
-├── PetCare360.Application/             ← regras de negócio. Depende só do Domain.
-│   ├── Services/                       ← os 6 services + AuditoriaService + AuthService
-│   └── Diagnostics/
-│       └── TelemetryConstants.cs
-├── PetCare360.Infrastructure/          ← EF Core, Oracle, MongoDB, JWT, health checks
-│   ├── Data/
-│   │   ├── AppDbContext.cs             ← configuração do EF Core (Fluent API + relacionamentos)
-│   │   └── AdminSeeder.cs              ← cria o admin padrão na primeira execução
-│   ├── Extensions/
-│   │   └── QueryableExtensions.cs      ← Ordenar() e PaginarAsync()
-│   ├── HealthChecks/
-│   │   ├── MigrationsHealthCheck.cs
-│   │   └── MongoDbHealthCheck.cs
-│   ├── Migrations/                     ← InitialCreate, AjusteModelo e AdicionaUsuarios
-│   ├── NoSql/                          ← configuração e mapeamento do MongoDB
-│   ├── Repositories/                   ← repositórios EF Core (Oracle) + AuditoriaRepository (MongoDB)
-│   ├── Security/                       ← JwtSettings, JwtTokenService, Pbkdf2SenhaHasher
-│   └── DependencyInjection.cs          ← registra tudo no container
-├── PetCare360.API/                     ← controllers e configuração da aplicação
-│   ├── Controllers/                    ← 6 de entidade + AuthController + AuditoriaController
-│   ├── Extensions/                     ← configuração do JWT e do Swagger
-│   ├── Handlers/
-│   │   └── GlobalExceptionHandler.cs
-│   ├── Hateoas/                        ← Link, Recurso, RecursoPaginado, HateoasBuilder
-│   ├── Middleware/
-│   │   └── CorrelationIdMiddleware.cs
-│   ├── Properties/
-│   │   └── launchSettings.json         ← perfis de execução (http/https)
-│   ├── Program.cs                      ← entrada, Serilog, autenticação, health checks, Swagger
-│   ├── appsettings.json                ← config (a senha do Oracle fica no User Secrets)
-│   └── PetCare360.API.csproj
-├── PetCare360.UnitTests/               ← testes unitários com Moq
-├── PetCare360.IntegrationTests/        ← testes de integração com WebApplicationFactory
+https://petcare360-rm564969.azurewebsites.net/health
+```
+
+Resposta esperada: `"status": "Healthy"`, com `oracle-database`, `mongodb` e `migrations` todos **Healthy**.
+
+### 2. Fazer login — `POST /api/Auth/login`
+
+No Swagger (`/swagger`):
+
+```json
+{
+  "email": "admin@petcare360.com",
+  "senha": "<senha definida em ADMIN_SENHA>"
+}
+```
+
+Copie o `token`, clique em **Authorize** 🔓 e cole só o token. Sem isso, as rotas abaixo voltam `401`.
+
+### 3. CRUD de Tutor com evidência no Oracle
+
+Pra cada operação na API, rode o SELECT no SQL Developer, conectado ao Oracle da FIAP:
+
+```sql
+SELECT ID_TUTOR, NM_TUTOR, CPF, EMAIL, TELEFONE, ENDERECO
+FROM TB_TUTOR
+WHERE CPF = '360.360.360-36';
+```
+
+**Inserir — `POST /api/Tutores`**
+
+```json
+{
+  "nmTutor": "Tutor Demonstração Sprint 4",
+  "cpf": "360.360.360-36",
+  "email": "demo.sprint4@petcare360.com",
+  "telefone": "(11) 98888-3600",
+  "endereco": "Av. Paulista, 1106 - Bela Vista, São Paulo/SP"
+}
+```
+
+Resposta `201 Created`. O SELECT passa a mostrar o registro. Anote o `idTutor` retornado.
+
+**Consultar — `GET /api/Tutores/{id}`**
+
+Resposta `200 OK` com o tutor e os links HATEOAS. O SELECT mostra o mesmo registro.
+
+**Atualizar — `PUT /api/Tutores/{id}`**
+
+```json
+{
+  "idTutor": 0,
+  "nmTutor": "Tutor Demonstração Sprint 4 - Atualizado",
+  "cpf": "360.360.360-36",
+  "email": "demo.sprint4@petcare360.com",
+  "telefone": "(11) 97777-3600",
+  "endereco": "Av. Paulista, 1106 - Bela Vista, São Paulo/SP"
+}
+```
+
+Troque o `0` pelo `idTutor` real. Resposta `204 No Content`. O SELECT mostra o nome e o telefone novos.
+
+**Deletar — `DELETE /api/Tutores/{id}`** (exige perfil Admin)
+
+Resposta `204 No Content`. O SELECT volta **sem linhas**.
+
+### 4. Auditoria no Cosmos DB
+
+As três operações de escrita geram registros de auditoria. Pra ver:
+
+- pela API: `GET /api/Auditoria/Tutor/{id}`
+- pelo portal: **Cosmos DB → Data Explorer → petcare360 → auditoria → Documents**
+
+---
+
+## Testes automatizados
+
+São **122 testes** rodando na CI a cada commit:
+
+| Projeto | Quantidade | O que cobre |
+|---|---|---|
+| `PetCare360.UnitTests` | 87 | Services (regras de negócio), JWT, hash de senha, HATEOAS, paginação, tratamento global de erros |
+| `PetCare360.IntegrationTests` | 35 | API completa em memória (WebApplicationFactory + EF Core InMemory): autenticação, autorização, CRUD, paginação, HATEOAS, auditoria e health checks |
+
+A cobertura de linhas nas camadas de Domínio e Aplicação é de **92,1%**. Os testes não dependem de banco real: o Oracle é substituído pelo InMemory e o MongoDB por um repositório fake, então rodam iguais no PC e no agente da pipeline.
+
+Pra rodar localmente:
+
+```bash
+dotnet test src/PetCare360.API.slnx
+```
+
+---
+
+## Estrutura do repositório
+
+```
+Challenge-Devops-Sprint4/
+├── src/                                   # Solution .NET 10 (Clean Architecture)
+│   ├── PetCare360.API/                    # Controllers, Program.cs, JWT, Swagger, HATEOAS
+│   ├── PetCare360.Application/            # Services (regras de negócio)
+│   ├── PetCare360.Domain/                 # Entidades, DTOs, interfaces
+│   ├── PetCare360.Infrastructure/         # EF Core (Oracle), MongoDB, repositórios, migrations
+│   ├── PetCare360.UnitTests/              # 87 testes unitários
+│   ├── PetCare360.IntegrationTests/       # 35 testes de integração
+│   └── PetCare360.API.slnx
+├── pipelines/
+│   ├── ci.yml                             # Build + testes + artefato
+│   └── cd.yml                             # Deploy no Azure Web App
+├── scripts/
+│   ├── 00-variaveis.sh                    # Nomes dos recursos
+│   ├── 01-criar-webapp.sh                 # Resource Group + App Service Plan + Web App
+│   ├── 02-criar-cosmosdb.sh               # Cosmos DB for MongoDB + coleção de auditoria
+│   └── 99-limpar-tudo.sh                  # Remove todos os recursos
+├── db/
+│   └── script_bd.sql                      # DDL comentado das 7 tabelas
 ├── docs/
-│   ├── cobertura/                      ← relatório HTML de cobertura
-│   ├── screenshots/                    ← prints usados neste README
-│   └── swagger.json                    ← especificação OpenAPI exportada
-├── docker-compose.yml                  ← MongoDB + Mongo Express
-├── .gitignore
-├── PetCare360.API.slnx                 ← solução .NET
-└── README.md                           ← este arquivo
+│   ├── arquitetura.png                    # Diagrama da arquitetura + fluxo CI/CD
+│   └── arquitetura.drawio                 # Fonte editável do diagrama
+├── docker-compose.yml                     # MongoDB local (opcional, só pra desenvolvimento)
+└── README.md
 ```
 
 ---
 
-# Resolução de problemas comuns
+## Rodando localmente (opcional)
 
-**"dotnet-ef" não é reconhecido como comando**
-> Você não instalou o tool. Volte ao Passo 3.
+Os segredos ficam no **User Secrets** do .NET, fora do repositório:
 
-**Erro `ORA-12541: TNS:no listener` ou `ORA-12170: TNS:Connect timeout`**
-> A connection string tá errada ou o servidor Oracle não tá acessível. Confere o `Data Source` no User Secrets.
+```bash
+cd src/PetCare360.API
+dotnet user-secrets set "ConnectionStrings:OracleConnection" "User Id=<RM>;Password=<senha>;Data Source=oracle.fiap.com.br:1521/ORCL;"
+dotnet user-secrets set "MongoDbSettings:ConnectionString" "<connection string do Cosmos DB ou mongodb://localhost:27017>"
+dotnet user-secrets set "Jwt:Key" "<chave com pelo menos 32 caracteres>"
+dotnet user-secrets set "AdminPadrao:Senha" "<senha do admin>"
+cd ../..
+dotnet run --project src/PetCare360.API --launch-profile http
+```
 
-**Erro `ORA-01017: invalid username/password`**
-> Usuário ou senha errados no User Secrets, ou você esqueceu de configurar. Confere o Passo 4.
+Swagger em `http://localhost:5260/swagger`. Pra usar um MongoDB local em vez do Cosmos DB, suba o container com `docker compose up -d`.
 
-**Erro `ORA-00942: a tabela ou view não existe`**
-> Você conectou no banco mas as tabelas não existem nesse schema. Roda o Passo 5.
-
-**Erro `ORA-00955: name is already used by an existing object`**
-> O banco já tem alguma tabela com nome conflitante (de outro projeto, por exemplo). Apaga ela no banco antes de rodar as migrations.
-
-**`/health/ready` mostra o `mongodb` como Unhealthy**
-> O container do MongoDB não está rodando. Abre o Docker Desktop, roda `docker compose up -d` e confere com `docker ps`.
-
-**Toda requisição volta 401**
-> Faltou fazer login e clicar em **Authorize**. O token vale 120 minutos — depois disso é só logar de novo.
-
-**DELETE ou Auditoria voltam 403**
-> Você está logado com um usuário comum. Essas ações são só do Admin.
-
-**O Visual Studio para numa `DbUpdateException` quando roda com F5**
-> É o debugger pausando na exceção antes do handler global tratar. Clica em **Continuar** (a API responde 409) ou roda sem debug com **Ctrl+F5**.
-
-**Erro `MSB3027` ou "the process cannot access the file" no build**
-> A API ainda está rodando e travou os arquivos. Para ela (Shift+F5 no Visual Studio) antes de compilar.
-
-**Swagger abre mas dá 500 ao testar endpoints**
-> Você esqueceu de rodar `dotnet ef database update` no Passo 5. Sem isso as tabelas não existem.
-
-**A página `/swagger` dá 404**
-> O perfil de execução tá em produção. Garanta que `ASPNETCORE_ENVIRONMENT` esteja como `Development` (o `launchSettings.json` do projeto já faz isso por padrão).
+> Cuidado com a senha do Oracle: a FIAP trava a conta depois de três tentativas erradas.
 
 ---
 
-# Sobre o projeto
+## Problemas que enfrentamos e como resolvemos
 
-Esse é um trabalho de faculdade do meu 2º ano de ADS. O foco era demonstrar domínio dos conceitos da matéria de **Advanced Business Development with .NET**: Web API, Clean Architecture, EF Core com Oracle, MongoDB, REST com HATEOAS, JWT, OpenAPI, observabilidade e testes automatizados.
+**Cosmos DB criado na versão 3.6.** O driver do MongoDB usado pelo projeto (3.x) exige servidor 4.4 ou superior. O parâmetro `--server-version` do Azure CLI foi ignorado tanto no `create` quanto no `update`, e a conta ficou em 3.6. O teste local pegou o erro antes do deploy (`reports wire version 6, but this version of the driver requires at least 9`). A solução foi atualizar a conta pra **6.0** em Settings → Features → Update MongoDB server version. O script já pede a 6.0 pra quando a ferramenta respeitar o parâmetro.
 
-Uma coisa que ficou anotada desde a sprint passada: como o projeto usa nullable reference types, campos `string` sem `?` viram obrigatórios na validação do ASP.NET mesmo sem `[Required]`. Isso afeta `Raca` no Pet e alguns outros campos que eu tinha pensado como opcionais. Corrigir exige migration nova, então deixei documentado.
+**Senha do administrador.** O seeder só cria o admin se ele não existir. Como o admin antigo estava no banco com a senha da entrega de .NET, ele foi removido do `TB_USUARIO_PETCARE` e recriado com a senha vinda do Variable Group. A senha fixa que existia no código foi retirada.
 
-Se você é o professor avaliando isso: bem-vindo, espero ter feito direito 
+**Fila do agente gratuito.** No plano gratuito do Azure DevOps (1 parallel job), algumas execuções ficam alguns minutos na fila antes de começar. É comportamento esperado e não afeta o resultado.
+
+**Testes sem credenciais.** Ao remover a chave do JWT do `appsettings.json`, os testes de login passaram a falhar. A chave e a senha de teste foram isoladas dentro do `ApiFactoryFixture`, que é usado só pelos testes.
 
 ---
 
-Petcare360 · 2TDSPW · FIAP · Setembro de 2026
+## Removendo os recursos
+
+```bash
+bash scripts/99-limpar-tudo.sh
+```
+
+Pede confirmação e remove o Resource Group inteiro: plano, Web App e Cosmos DB. Pra conferir:
+
+```bash
+az group show --name rg-petcare360-sprint4
+```
+
+O retorno esperado depois da remoção é `ResourceGroupNotFound`.
+
+---
+
+PetCare 360 · 2TDSPW · FIAP · Outubro de 2026
