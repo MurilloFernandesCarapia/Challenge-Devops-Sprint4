@@ -1,0 +1,82 @@
+name: CD-$(Date:yyyyMMdd)$(Rev:.r)
+
+trigger: none
+
+pr: none
+
+resources:
+  pipelines:
+    - pipeline: ci
+      source: PetCare360-CI
+      trigger:
+        branches:
+          include:
+            - master
+
+pool:
+  vmImage: ubuntu-24.04
+
+variables:
+  - group: vg-petcare360-secrets
+  - name: azureSubscription
+    value: sc-azure-petcare360
+  - name: webAppName
+    value: petcare360-rm564969
+  - name: resourceGroup
+    value: rg-petcare360-sprint4
+
+stages:
+  - stage: CD
+    displayName: CD - Deploy no Azure Web App
+    jobs:
+      - deployment: DeployWebApp
+        displayName: Deploy da API PetCare 360
+        environment: petcare360-producao
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - download: ci
+                  artifact: petcare360-api
+                  displayName: Baixar o artefato gerado pelo CI
+
+                - task: AzureAppServiceSettings@1
+                  displayName: Configurar as variáveis de ambiente protegidas no Web App
+                  inputs:
+                    azureSubscription: ${{ variables.azureSubscription }}
+                    appName: $(webAppName)
+                    resourceGroupName: $(resourceGroup)
+                    appSettings: |
+                      [
+                        { "name": "ASPNETCORE_ENVIRONMENT", "value": "Production", "slotSetting": false },
+                        { "name": "ConnectionStrings__OracleConnection", "value": "$(ORACLE_CONNECTION)", "slotSetting": false },
+                        { "name": "MongoDbSettings__ConnectionString", "value": "$(MONGO_CONNECTION)", "slotSetting": false },
+                        { "name": "Jwt__Key", "value": "$(JWT_KEY)", "slotSetting": false },
+                        { "name": "AdminPadrao__Senha", "value": "$(ADMIN_SENHA)", "slotSetting": false }
+                      ]
+
+                - task: AzureWebApp@1
+                  displayName: Publicar a API no Azure Web App
+                  inputs:
+                    azureSubscription: ${{ variables.azureSubscription }}
+                    appType: webAppLinux
+                    appName: $(webAppName)
+                    resourceGroupName: $(resourceGroup)
+                    package: $(Pipeline.Workspace)/ci/petcare360-api/*.zip
+                    runtimeStack: DOTNETCORE|10.0
+                    startUpCommand: dotnet PetCare360.API.dll
+
+                - script: |
+                    URL="https://$(webAppName).azurewebsites.net/health/live"
+                    for i in $(seq 1 20); do
+                      STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL")
+                      echo "Tentativa $i: $URL respondeu HTTP $STATUS"
+                      if [ "$STATUS" = "200" ]; then
+                        echo "API no ar."
+                        exit 0
+                      fi
+                      sleep 15
+                    done
+                    echo "A API nao respondeu a tempo."
+                    exit 1
+                  displayName: Validar a API publicada (smoke test)
