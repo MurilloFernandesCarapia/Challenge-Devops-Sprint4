@@ -24,7 +24,10 @@ namespace PetCare360.IntegrationTests.FactoryFixture
                 config.AddInMemoryCollection(new Dictionary<string, string?>
                 {
                     ["ConnectionStrings:OracleConnection"] =
-                        "User Id=teste;Password=teste;Data Source=localhost:1521/XEPDB1;"
+                        "User Id=teste;Password=teste;Data Source=localhost:1521/XEPDB1;",
+                    ["Jwt:Key"] = "PetCare360-Chave-Exclusiva-Dos-Testes-Automatizados-2026",
+                    ["AdminPadrao:Email"] = "admin@petcare360.com",
+                    ["AdminPadrao:Senha"] = "Admin@123"
                 });
             });
 

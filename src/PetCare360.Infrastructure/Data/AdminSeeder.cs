@@ -16,8 +16,14 @@ namespace PetCare360.Infrastructure.Data
             var senhaHasher = scope.ServiceProvider.GetRequiredService<ISenhaHasher>();
             var logger = scope.ServiceProvider.GetRequiredService<ILoggerFactory>().CreateLogger(nameof(AdminSeeder));
 
-            var email = (configuration["AdminPadrao:Email"] ?? "admin@petcare360.com").ToLower();
-            var senha = configuration["AdminPadrao:Senha"] ?? "Admin@123";
+            var email = configuration["AdminPadrao:Email"]?.ToLower();
+            var senha = configuration["AdminPadrao:Senha"];
+
+            if (string.IsNullOrWhiteSpace(email) || string.IsNullOrWhiteSpace(senha))
+            {
+                logger.LogWarning("Administrador padrão não configurado. Defina AdminPadrao__Email e AdminPadrao__Senha nas variáveis de ambiente.");
+                return;
+            }
 
             try
             {
