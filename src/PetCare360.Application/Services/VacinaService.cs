@@ -5,6 +5,7 @@ using PetCare360.Application.Diagnostics;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Exceptions;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 
 namespace PetCare360.Application.Services
 {
@@ -12,6 +13,7 @@ namespace PetCare360.Application.Services
     {
         private readonly IVacinaRepository _vacinaRepository;
         private readonly IPetRepository _petRepository;
+        private readonly IAuditoriaService _auditoriaService;
         private readonly ILogger<VacinaService> _logger;
 
         private static readonly ActivitySource ActivitySource = new(TelemetryConstants.ServiceName);
@@ -21,11 +23,13 @@ namespace PetCare360.Application.Services
         public VacinaService(
             IVacinaRepository vacinaRepository,
             IPetRepository petRepository,
+            IAuditoriaService auditoriaService,
             ILogger<VacinaService> logger,
             IMeterFactory meterFactory)
         {
             _vacinaRepository = vacinaRepository;
             _petRepository = petRepository;
+            _auditoriaService = auditoriaService;
             _logger = logger;
 
             var meter = meterFactory.Create(TelemetryConstants.MeterName);
@@ -35,6 +39,11 @@ namespace PetCare360.Application.Services
         public async Task<IEnumerable<Vacina>> GetAllAsync()
         {
             return await _vacinaRepository.GetAllAsync();
+        }
+
+        public async Task<PagedResult<Vacina>> GetPagedAsync(VacinaQueryParameters parametros)
+        {
+            return await _vacinaRepository.GetPagedAsync(parametros);
         }
 
         public async Task<Vacina?> GetByIdAsync(int id)
@@ -53,7 +62,6 @@ namespace PetCare360.Application.Services
             activity?.SetTag("vacina.nome", vacina.NmVacina);
             activity?.SetTag("vacina.pet", vacina.IdPet);
 
-            //REGRA DE NEGÓCIO: vacina sempre pertence a um pet cadastrado
             bool petExiste = await _petRepository.ExistsAsync(vacina.IdPet);
             if (!petExiste)
             {
@@ -62,6 +70,8 @@ namespace PetCare360.Application.Services
             }
 
             await _vacinaRepository.AddAsync(vacina);
+
+            await _auditoriaService.RegistrarAsync(nameof(Vacina), vacina.IdVacina, AcaoAuditoria.Criacao, $"Vacina {vacina.NmVacina} registrada para o pet {vacina.IdPet}");
 
             _logger.LogInformation("Vacina registrada com sucesso: {@Vacina}", vacina);
             _vacinasAplicadasCounter.Add(1);
@@ -86,6 +96,8 @@ namespace PetCare360.Application.Services
 
             await _vacinaRepository.UpdateAsync(vacinaExistente);
 
+            await _auditoriaService.RegistrarAsync(nameof(Vacina), id, AcaoAuditoria.Atualizacao, $"Vacina {vacinaExistente.NmVacina} atualizada");
+
             _logger.LogInformation("Vacina atualizada. IdVacina: {IdVacina}", id);
             return true;
         }
@@ -99,6 +111,8 @@ namespace PetCare360.Application.Services
             }
 
             await _vacinaRepository.DeleteAsync(vacina);
+
+            await _auditoriaService.RegistrarAsync(nameof(Vacina), id, AcaoAuditoria.Exclusao, $"Vacina {vacina.NmVacina} removida");
 
             _logger.LogInformation("Vacina removida. IdVacina: {IdVacina}", id);
             return true;

@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 using PetCare360.Infrastructure.Data;
+using PetCare360.Infrastructure.Extensions;
 
 namespace PetCare360.Infrastructure.Repositories
 {
@@ -17,6 +19,39 @@ namespace PetCare360.Infrastructure.Repositories
         public async Task<IEnumerable<Consulta>> GetAllAsync()
         {
             return await _dbContext.Consultas.ToListAsync();
+        }
+
+        public async Task<PagedResult<Consulta>> GetPagedAsync(ConsultaQueryParameters parametros)
+        {
+            var query = _dbContext.Consultas.AsNoTracking().AsQueryable();
+
+            if (parametros.IdPet.HasValue)
+            {
+                query = query.Where(c => c.IdPet == parametros.IdPet.Value);
+            }
+
+            if (parametros.IdClinica.HasValue)
+            {
+                query = query.Where(c => c.IdClinica == parametros.IdClinica.Value);
+            }
+
+            if (parametros.DataInicio.HasValue)
+            {
+                query = query.Where(c => c.DtConsulta >= parametros.DataInicio.Value);
+            }
+
+            if (parametros.DataFim.HasValue)
+            {
+                query = query.Where(c => c.DtConsulta <= parametros.DataFim.Value);
+            }
+
+            query = parametros.OrdenarPor?.ToLower() switch
+            {
+                "data" => query.Ordenar(c => c.DtConsulta, parametros.Ascendente),
+                _ => query.Ordenar(c => c.IdConsulta, parametros.Ascendente)
+            };
+
+            return await query.PaginarAsync(parametros);
         }
 
         public async Task<Consulta?> GetByIdAsync(int id)

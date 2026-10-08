@@ -260,6 +260,51 @@ namespace PetCare360.Infrastructure.Migrations
                     b.ToTable("TB_TUTOR");
                 });
 
+            modelBuilder.Entity("PetCare360.Domain.Entities.Usuario", b =>
+                {
+                    b.Property<int>("IdUsuario")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("NUMBER(10)")
+                        .HasColumnName("ID_USUARIO");
+
+                    OraclePropertyBuilderExtensions.UseIdentityColumn(b.Property<int>("IdUsuario"));
+
+                    b.Property<DateTime>("DtCriacao")
+                        .HasColumnType("TIMESTAMP(7)")
+                        .HasColumnName("DT_CRIACAO");
+
+                    b.Property<string>("Email")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("NVARCHAR2(100)")
+                        .HasColumnName("EMAIL");
+
+                    b.Property<string>("NmUsuario")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("NVARCHAR2(100)")
+                        .HasColumnName("NM_USUARIO");
+
+                    b.Property<string>("Perfil")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("NVARCHAR2(20)")
+                        .HasColumnName("PERFIL");
+
+                    b.Property<string>("SenhaHash")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .HasColumnType("NVARCHAR2(256)")
+                        .HasColumnName("SENHA_HASH");
+
+                    b.HasKey("IdUsuario");
+
+                    b.HasIndex("Email")
+                        .IsUnique();
+
+                    b.ToTable("TB_USUARIO_PETCARE");
+                });
+
             modelBuilder.Entity("PetCare360.Domain.Entities.Vacina", b =>
                 {
                     b.Property<int>("IdVacina")

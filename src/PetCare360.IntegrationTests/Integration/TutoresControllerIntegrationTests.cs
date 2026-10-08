@@ -1,25 +1,24 @@
 ﻿using System.Net;
 using System.Net.Http.Json;
+using PetCare360.API.Hateoas;
 using PetCare360.Domain.Entities;
 using PetCare360.IntegrationTests.FactoryFixture;
 
 namespace PetCare360.IntegrationTests.Integration
 {
-    [Collection("ApiCollection")] 
+    [Collection("ApiCollection")]
     public class TutoresControllerIntegrationTests
     {
         private readonly HttpClient _client;
 
         public TutoresControllerIntegrationTests(ApiFactoryFixture factory)
         {
-            
             _client = factory.CreateClient();
         }
 
         [Fact]
         public async Task CriarTutor_DadosValidos_RetornaCreated()
         {
-            
             var novoTutor = new
             {
                 nmTutor = "Carla Menezes",
@@ -29,10 +28,8 @@ namespace PetCare360.IntegrationTests.Integration
                 endereco = "Rua das Palmeiras, 45"
             };
 
-            
             var response = await _client.PostAsJsonAsync("/api/Tutores", novoTutor);
 
-            
             Assert.Equal(HttpStatusCode.Created, response.StatusCode);
 
             var tutorCriado = await response.Content.ReadFromJsonAsync<Tutor>();
@@ -44,24 +41,20 @@ namespace PetCare360.IntegrationTests.Integration
         [Fact]
         public async Task CriarTutor_SemNome_RetornaBadRequest()
         {
-            
             var tutorInvalido = new
             {
                 cpf = "111.222.333-44",
                 email = "sem.nome@petcare360.com"
             };
 
-            
             var response = await _client.PostAsJsonAsync("/api/Tutores", tutorInvalido);
 
-            
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
 
         [Fact]
         public async Task CriarTutor_EmailInvalido_RetornaBadRequest()
         {
-            
             var tutorInvalido = new
             {
                 nmTutor = "Email Errado",
@@ -71,27 +64,22 @@ namespace PetCare360.IntegrationTests.Integration
                 endereco = "Rua Teste, 10"
             };
 
-            
             var response = await _client.PostAsJsonAsync("/api/Tutores", tutorInvalido);
 
-            
             Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         }
 
         [Fact]
         public async Task BuscarTutor_IdInexistente_RetornaNotFound()
         {
-            
             var response = await _client.GetAsync("/api/Tutores/999999");
 
-            
             Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
         }
 
         [Fact]
         public async Task ListarTutores_AposCadastro_RetornaTutorNaLista()
         {
-            
             var novoTutor = new
             {
                 nmTutor = "Diego Fontes",
@@ -102,14 +90,12 @@ namespace PetCare360.IntegrationTests.Integration
             };
             await _client.PostAsJsonAsync("/api/Tutores", novoTutor);
 
-            
-            var response = await _client.GetAsync("/api/Tutores");
+            var response = await _client.GetAsync("/api/Tutores?email=diego.fontes@petcare360.com");
 
-            
-            response.EnsureSuccessStatusCode(); // Falha se não for 200-299
-            var tutores = await response.Content.ReadFromJsonAsync<List<Tutor>>();
-            Assert.NotNull(tutores);
-            Assert.Contains(tutores, t => t.Email == "diego.fontes@petcare360.com");
+            response.EnsureSuccessStatusCode();
+            var resultado = await response.Content.ReadFromJsonAsync<RecursoPaginado<Tutor>>();
+            Assert.NotNull(resultado);
+            Assert.Contains(resultado.Itens, r => r.Dados.Email == "diego.fontes@petcare360.com");
         }
     }
 }

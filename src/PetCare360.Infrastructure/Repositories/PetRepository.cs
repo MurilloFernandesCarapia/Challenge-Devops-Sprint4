@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 using PetCare360.Infrastructure.Data;
+using PetCare360.Infrastructure.Extensions;
 
 namespace PetCare360.Infrastructure.Repositories
 {
@@ -17,6 +19,49 @@ namespace PetCare360.Infrastructure.Repositories
         public async Task<IEnumerable<Pet>> GetAllAsync()
         {
             return await _dbContext.Pets.ToListAsync();
+        }
+
+        public async Task<PagedResult<Pet>> GetPagedAsync(PetQueryParameters parametros)
+        {
+            
+            var query = _dbContext.Pets.AsNoTracking().AsQueryable();
+
+            
+            if (!string.IsNullOrWhiteSpace(parametros.Nome))
+            {
+                var nome = parametros.Nome.ToLower();
+                query = query.Where(p => p.NmPet.ToLower().Contains(nome));
+            }
+
+            if (!string.IsNullOrWhiteSpace(parametros.Especie))
+            {
+                var especie = parametros.Especie.ToLower();
+                query = query.Where(p => p.Especie.ToLower() == especie);
+            }
+
+            if (!string.IsNullOrWhiteSpace(parametros.Raca))
+            {
+                var raca = parametros.Raca.ToLower();
+                query = query.Where(p => p.Raca != null && p.Raca.ToLower().Contains(raca));
+            }
+
+            if (parametros.IdTutor.HasValue)
+            {
+                query = query.Where(p => p.IdTutor == parametros.IdTutor.Value);
+            }
+
+            
+            query = parametros.OrdenarPor?.ToLower() switch
+            {
+                "nome" => query.Ordenar(p => p.NmPet, parametros.Ascendente),
+                "especie" => query.Ordenar(p => p.Especie, parametros.Ascendente),
+                "peso" => query.Ordenar(p => p.Peso, parametros.Ascendente),
+                "datanascimento" => query.Ordenar(p => p.DtNascimento, parametros.Ascendente),
+                _ => query.Ordenar(p => p.IdPet, parametros.Ascendente)
+            };
+
+            
+            return await query.PaginarAsync(parametros);
         }
 
         public async Task<Pet?> GetByIdAsync(int id)

@@ -1,10 +1,12 @@
 ﻿using PetCare360.Domain.Entities;
+using PetCare360.Domain.Pagination;
 
 namespace PetCare360.Domain.Interfaces
 {
     public interface IConsultaService
     {
         Task<IEnumerable<Consulta>> GetAllAsync();
+        Task<PagedResult<Consulta>> GetPagedAsync(ConsultaQueryParameters parametros);
         Task<Consulta?> GetByIdAsync(int id);
         Task<IEnumerable<Consulta>> GetByPetAsync(int petId);
         Task<IEnumerable<Consulta>> GetByClinicaAsync(int clinicaId);

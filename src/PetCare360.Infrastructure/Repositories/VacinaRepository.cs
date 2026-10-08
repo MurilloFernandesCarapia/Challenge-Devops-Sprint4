@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 using PetCare360.Infrastructure.Data;
+using PetCare360.Infrastructure.Extensions;
 
 namespace PetCare360.Infrastructure.Repositories
 {
@@ -17,6 +19,43 @@ namespace PetCare360.Infrastructure.Repositories
         public async Task<IEnumerable<Vacina>> GetAllAsync()
         {
             return await _dbContext.Vacinas.ToListAsync();
+        }
+
+        public async Task<PagedResult<Vacina>> GetPagedAsync(VacinaQueryParameters parametros)
+        {
+            var query = _dbContext.Vacinas.AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(parametros.Nome))
+            {
+                var nome = parametros.Nome.ToLower();
+                query = query.Where(v => v.NmVacina.ToLower().Contains(nome));
+            }
+
+            if (!string.IsNullOrWhiteSpace(parametros.Fabricante))
+            {
+                var fabricante = parametros.Fabricante.ToLower();
+                query = query.Where(v => v.Fabricante != null && v.Fabricante.ToLower().Contains(fabricante));
+            }
+
+            if (parametros.IdPet.HasValue)
+            {
+                query = query.Where(v => v.IdPet == parametros.IdPet.Value);
+            }
+
+            if (parametros.ProximaDoseAte.HasValue)
+            {
+                query = query.Where(v => v.DtProximaDose != null && v.DtProximaDose <= parametros.ProximaDoseAte.Value);
+            }
+
+            query = parametros.OrdenarPor?.ToLower() switch
+            {
+                "nome" => query.Ordenar(v => v.NmVacina, parametros.Ascendente),
+                "dataaplicacao" => query.Ordenar(v => v.DtAplicacao, parametros.Ascendente),
+                "proximadose" => query.Ordenar(v => v.DtProximaDose, parametros.Ascendente),
+                _ => query.Ordenar(v => v.IdVacina, parametros.Ascendente)
+            };
+
+            return await query.PaginarAsync(parametros);
         }
 
         public async Task<Vacina?> GetByIdAsync(int id)

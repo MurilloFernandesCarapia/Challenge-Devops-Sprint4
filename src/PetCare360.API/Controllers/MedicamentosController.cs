@@ -1,14 +1,20 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using PetCare360.API.Hateoas;
 using PetCare360.Domain.Entities;
-using PetCare360.Domain.Exceptions;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 
 namespace PetCare360.API.Controllers
 {
     [ApiController]
     [Route("api/[controller]")]
+    [Authorize]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
     public class MedicamentosController : ControllerBase
     {
+        private const string Rota = "/api/Medicamentos";
+
         private readonly IMedicamentoService _medicamentoService;
         private readonly ILogger<MedicamentosController> _logger;
 
@@ -19,15 +25,15 @@ namespace PetCare360.API.Controllers
         }
 
         [HttpGet]
-        [ProducesResponseType(StatusCodes.Status200OK)]
-        public async Task<IActionResult> GetAll()
+        [ProducesResponseType(typeof(RecursoPaginado<Medicamento>), StatusCodes.Status200OK)]
+        public async Task<IActionResult> GetAll([FromQuery] MedicamentoQueryParameters parametros)
         {
-            var medicamentos = await _medicamentoService.GetAllAsync();
-            return Ok(medicamentos);
+            var medicamentos = await _medicamentoService.GetPagedAsync(parametros);
+            return Ok(HateoasBuilder.CriarRecursoPaginado(medicamentos, parametros, Rota, CriarRecurso));
         }
 
         [HttpGet("{id}")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(Recurso<Medicamento>), StatusCodes.Status200OK)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> GetById(int id)
         {
@@ -36,15 +42,15 @@ namespace PetCare360.API.Controllers
             {
                 return NotFound("Medicamento não encontrado.");
             }
-            return Ok(medicamento);
+            return Ok(CriarRecurso(medicamento));
         }
 
         [HttpGet("pet/{petId}")]
-        [ProducesResponseType(StatusCodes.Status200OK)]
+        [ProducesResponseType(typeof(IEnumerable<Recurso<Medicamento>>), StatusCodes.Status200OK)]
         public async Task<IActionResult> GetByPet(int petId)
         {
             var medicamentos = await _medicamentoService.GetByPetAsync(petId);
-            return Ok(medicamentos);
+            return Ok(medicamentos.Select(CriarRecurso));
         }
 
         [HttpPost]
@@ -57,16 +63,8 @@ namespace PetCare360.API.Controllers
                 return BadRequest(ModelState);
             }
 
-            try
-            {
-                var medicamentoCriado = await _medicamentoService.CreateAsync(medicamento);
-                return CreatedAtAction(nameof(GetById), new { id = medicamentoCriado.IdMedicamento }, medicamentoCriado);
-            }
-            catch (RegraDeNegocioException ex)
-            {
-                _logger.LogWarning(ex, "Regra de negócio violada ao prescrever medicamento.");
-                return BadRequest(ex.Message);
-            }
+            var medicamentoCriado = await _medicamentoService.CreateAsync(medicamento);
+            return CreatedAtAction(nameof(GetById), new { id = medicamentoCriado.IdMedicamento }, medicamentoCriado);
         }
 
         [HttpPut("{id}")]
@@ -95,6 +93,8 @@ namespace PetCare360.API.Controllers
         }
 
         [HttpDelete("{id}")]
+        [Authorize(Roles = PerfilUsuario.Admin)]
+        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Delete(int id)
@@ -106,6 +106,19 @@ namespace PetCare360.API.Controllers
             }
 
             return NoContent();
+        }
+
+        private static Recurso<Medicamento> CriarRecurso(Medicamento medicamento)
+        {
+            var recurso = HateoasBuilder.CriarRecurso(medicamento, Rota, medicamento.IdMedicamento,
+                new Link($"/api/Pets/{medicamento.IdPet}", "pet", "GET"));
+
+            if (medicamento.IdConsulta.HasValue)
+            {
+                recurso.Links.Add(new Link($"/api/Consultas/{medicamento.IdConsulta}", "consulta", "GET"));
+            }
+
+            return recurso;
         }
     }
 }

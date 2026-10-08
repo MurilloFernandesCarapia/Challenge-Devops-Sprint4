@@ -1,10 +1,12 @@
 ﻿using PetCare360.Domain.Entities;
+using PetCare360.Domain.Pagination;
 
 namespace PetCare360.Domain.Interfaces
 {
     public interface IPetService
     {
         Task<IEnumerable<Pet>> GetAllAsync();
+        Task<PagedResult<Pet>> GetPagedAsync(PetQueryParameters parametros);
         Task<Pet?> GetByIdAsync(int id);
         Task<IEnumerable<Pet>> GetByTutorAsync(int tutorId);
         Task<IEnumerable<Pet>> GetByEspecieAsync(string especie);

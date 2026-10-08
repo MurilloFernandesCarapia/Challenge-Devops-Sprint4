@@ -4,12 +4,14 @@ using Microsoft.Extensions.Logging;
 using PetCare360.Application.Diagnostics;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 
 namespace PetCare360.Application.Services
 {
     public class TutorService : ITutorService
     {
         private readonly ITutorRepository _tutorRepository;
+        private readonly IAuditoriaService _auditoriaService;
         private readonly ILogger<TutorService> _logger;
 
         private static readonly ActivitySource ActivitySource = new(TelemetryConstants.ServiceName);
@@ -18,10 +20,12 @@ namespace PetCare360.Application.Services
 
         public TutorService(
             ITutorRepository tutorRepository,
+            IAuditoriaService auditoriaService,
             ILogger<TutorService> logger,
             IMeterFactory meterFactory)
         {
             _tutorRepository = tutorRepository;
+            _auditoriaService = auditoriaService;
             _logger = logger;
 
             var meter = meterFactory.Create(TelemetryConstants.MeterName);
@@ -31,6 +35,11 @@ namespace PetCare360.Application.Services
         public async Task<IEnumerable<Tutor>> GetAllAsync()
         {
             return await _tutorRepository.GetAllAsync();
+        }
+
+        public async Task<PagedResult<Tutor>> GetPagedAsync(TutorQueryParameters parametros)
+        {
+            return await _tutorRepository.GetPagedAsync(parametros);
         }
 
         public async Task<Tutor?> GetByIdAsync(int id)
@@ -44,6 +53,8 @@ namespace PetCare360.Application.Services
             activity?.SetTag("tutor.nome", tutor.NmTutor);
 
             await _tutorRepository.AddAsync(tutor);
+
+            await _auditoriaService.RegistrarAsync(nameof(Tutor), tutor.IdTutor, AcaoAuditoria.Criacao, $"Tutor {tutor.NmTutor} cadastrado");
 
             _logger.LogInformation("Tutor cadastrado com sucesso: {@Tutor}", tutor);
             _tutoresCriadosCounter.Add(1);
@@ -67,6 +78,8 @@ namespace PetCare360.Application.Services
 
             await _tutorRepository.UpdateAsync(tutorExistente);
 
+            await _auditoriaService.RegistrarAsync(nameof(Tutor), id, AcaoAuditoria.Atualizacao, $"Tutor {tutorExistente.NmTutor} atualizado");
+
             _logger.LogInformation("Tutor atualizado. IdTutor: {IdTutor}", id);
             return true;
         }
@@ -80,6 +93,8 @@ namespace PetCare360.Application.Services
             }
 
             await _tutorRepository.DeleteAsync(tutor);
+
+            await _auditoriaService.RegistrarAsync(nameof(Tutor), id, AcaoAuditoria.Exclusao, $"Tutor {tutor.NmTutor} removido");
 
             _logger.LogInformation("Tutor removido. IdTutor: {IdTutor}", id);
             return true;

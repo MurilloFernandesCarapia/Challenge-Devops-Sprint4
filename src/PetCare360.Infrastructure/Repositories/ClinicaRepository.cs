@@ -1,7 +1,9 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using PetCare360.Domain.Entities;
 using PetCare360.Domain.Interfaces;
+using PetCare360.Domain.Pagination;
 using PetCare360.Infrastructure.Data;
+using PetCare360.Infrastructure.Extensions;
 
 namespace PetCare360.Infrastructure.Repositories
 {
@@ -17,6 +19,31 @@ namespace PetCare360.Infrastructure.Repositories
         public async Task<IEnumerable<Clinica>> GetAllAsync()
         {
             return await _dbContext.Clinicas.ToListAsync();
+        }
+
+        public async Task<PagedResult<Clinica>> GetPagedAsync(ClinicaQueryParameters parametros)
+        {
+            var query = _dbContext.Clinicas.AsNoTracking().AsQueryable();
+
+            if (!string.IsNullOrWhiteSpace(parametros.Nome))
+            {
+                var nome = parametros.Nome.ToLower();
+                query = query.Where(c => c.NmClinica.ToLower().Contains(nome));
+            }
+
+            if (!string.IsNullOrWhiteSpace(parametros.Cnpj))
+            {
+                var cnpj = parametros.Cnpj;
+                query = query.Where(c => c.Cnpj.Contains(cnpj));
+            }
+
+            query = parametros.OrdenarPor?.ToLower() switch
+            {
+                "nome" => query.Ordenar(c => c.NmClinica, parametros.Ascendente),
+                _ => query.Ordenar(c => c.IdClinica, parametros.Ascendente)
+            };
+
+            return await query.PaginarAsync(parametros);
         }
 
         public async Task<Clinica?> GetByIdAsync(int id)
