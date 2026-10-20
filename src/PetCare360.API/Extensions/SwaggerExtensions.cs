@@ -11,7 +11,7 @@ namespace PetCare360.API.Extensions
             {
                 c.SwaggerDoc("v1", new OpenApiInfo
                 {
-                    Title = "PetCare360 API",
+                    Title = "PetCare360 API - Sprint 4 DevOps",
                     Version = "v1",
                     Description = "API do PetCare 360 - Challenge FIAP 2026. Faça login em POST /api/Auth/login e use o botão Authorize para enviar o token."
                 });
