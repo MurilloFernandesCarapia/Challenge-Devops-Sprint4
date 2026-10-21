@@ -114,8 +114,6 @@ namespace PetCare360.API.Controllers
         }
 
         [HttpDelete("{id}")]
-        [Authorize(Roles = PerfilUsuario.Admin)]
-        [ProducesResponseType(StatusCodes.Status403Forbidden)]
         [ProducesResponseType(StatusCodes.Status204NoContent)]
         [ProducesResponseType(StatusCodes.Status404NotFound)]
         public async Task<IActionResult> Delete(int id)
